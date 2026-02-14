@@ -6,7 +6,7 @@
 
 ## 为什么重写？
 
-原版[qmd-ts](https://github.com/t0has/qmd)使用`node-llama-cpp`在Windows上存在严重的稳定性问题（随机崩溃）。本项目改用`transformers + PyTorch`技术栈：
+原版[qmd-ts](https://github.com/tobi/qmd)使用`node-llama-cpp`在Windows上存在严重的稳定性问题（随机崩溃）。本项目改用`transformers + PyTorch`技术栈：
 
 ✅ **Windows完美兼容** - 不再崩溃  
 ✅ **更高质量模型** - MTEB基准+7%，检索准确率+15%  
@@ -101,10 +101,10 @@ qmd query "智能查询扩展和重排序"
 
 **本项目完全由AI自主开发完成**，采用以下技术栈：
 
-- **开发平台**: [OpenCode](https://opencode.dev) - 开源AI编程框架
+- **开发平台**: [OpenCode](https://opencode.ai) - 开源AI编程框架
 - **主模型**: GLM-4.7 (智谱AI) - 核心代码生成与架构设计
 - **辅助模型**: MiniMax2.5-free - 代码审查与优化建议
-- **监督**: [OpenClaw](https://github.com/hammercui/openclaw) - 项目监督与质量把控
+- **监督**: [OpenClaw](https://github.com/openclaw/openclaw) - 项目监督与质量把控
 
 **开发分工**:
 - 🤖 **AI自主完成**: 所有代码实现、文档编写、测试用例、CI/CD配置
@@ -118,7 +118,7 @@ qmd query "智能查询扩展和重排序"
 
 ## 项目致谢
 
-感谢原版[qmd-ts](https://github.com/t0has/qmd)的优秀设计理念。本Python重写版在保持100% CLI兼容性的同时，通过更稳定的技术栈和更高质量的模型，为Windows用户提供了可靠的本地文档搜索解决方案。
+感谢原版[qmd-ts](https://github.com/tobi/qmd)的优秀设计理念。本Python重写版在保持100% CLI兼容性的同时，通过更稳定的技术栈和更高质量的模型，为Windows用户提供了可靠的本地文档搜索解决方案。
 
 ## 许可证
 
@@ -126,5 +126,5 @@ MIT License - 与原版保持一致
 
 ---
 
-**原项目地址**: [qmd-ts](https://github.com/t0has/qmd)  
+**原项目地址**: [qmd-ts](https://github.com/tobi/qmd)  
 **本仓库**: [qmd-python-cuda](https://github.com/hammercui/qmd-python-cuda)
