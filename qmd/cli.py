@@ -8,6 +8,7 @@ from .search.vector import VectorSearch
 from .search.hybrid import HybridSearcher
 from .search.rerank import LLMReranker
 from .models.config import AppConfig, CollectionConfig
+from .models.downloader import ModelDownloader
 import os
 
 console = Console()
@@ -611,6 +612,79 @@ def query(ctx_obj, query, collection, limit, rerank):
         )
     
     console.print(table)
+
+@cli.command()
+@click.option("--download/--no-download", default=False, help="Auto-download missing models")
+@click.pass_obj
+def check(ctx_obj, download):
+    """Check system status (dependencies, CUDA, models)"""
+    from rich.panel import Panel
+    from rich.columns import Columns
+
+    console.print(Panel.fit("[bold cyan]System Status Check[/bold cyan]"))
+
+    # Check dependencies
+    console.print("\n[bold]Dependencies:[/bold]")
+    deps_status = {}
+
+    # Check torch
+    try:
+        import torch
+        deps_status["torch"] = ("✓", f"v{torch.__version__}")
+    except ImportError:
+        deps_status["torch"] = ("✗", "Not installed")
+
+    # Check transformers
+    try:
+        import transformers
+        deps_status["transformers"] = ("✓", f"v{transformers.__version__}")
+    except ImportError:
+        deps_status["transformers"] = ("✗", "Not installed")
+
+    # Check fastembed
+    try:
+        import fastembed
+        deps_status["fastembed"] = ("✓", "Installed")
+    except ImportError:
+        deps_status["fastembed"] = ("✗", "Not installed")
+
+    # Check device
+    console.print("\n[bold]Device:[/bold]")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            console.print(f"  [green]✓ CUDA[/green]: {gpu_name}")
+            console.print(f"  [dim]CUDA Version: {torch.version.cuda}[/dim]")
+        else:
+            console.print(f"  [yellow]⚠ CPU-only[/yellow] (No CUDA detected)")
+    except ImportError:
+        console.print(f"  [red]✗ Cannot detect (torch not installed)[/red]")
+
+    # Check models
+    console.print("\n[bold]Models:[/bold]")
+    downloader = ModelDownloader()
+    availability = downloader.check_availability()
+
+    for model_key, available in availability.items():
+        status = "[green]✓[/green]" if available else "[red]✗[/red]"
+        size_mb = downloader.MODELS[model_key]["size_mb"]
+        console.print(f"  {status} {model_key.capitalize():12} ({size_mb}MB)")
+
+    # Recommendations
+    console.print("\n[bold]Recommendations:[/bold]")
+    missing_deps = [k for k, (icon, _) in deps_status.items() if icon == "✗"]
+    missing_models = [k for k, v in availability.items() if not v]
+
+    if missing_deps:
+        console.print(f"  [yellow]Install:[/yellow] pip install -e .[cpu]  # or .[cuda]")
+    if missing_models:
+        if download:
+            console.print(f"  [cyan]Downloading models...[/cyan]")
+            downloader.download_all()
+        else:
+            console.print(f"  [yellow]Run:[/yellow] qmd download  # Download all models")
+            console.print(f"  [yellow]     or:[/yellow] python -m qmd.models.downloader")
 
 @cli.group()
 def context():

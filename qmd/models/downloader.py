@@ -1,0 +1,220 @@
+"""
+Multi-source model downloader with parallel HF + ModelScope support.
+
+Features:
+- Parallel download from HuggingFace and ModelScope
+- Rich progress bars
+- Automatic fallback (use fastest completed)
+- Local caching at ~/.cache/qmd/models/
+"""
+
+import os
+from pathlib import Path
+from typing import Optional, Dict, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import shutil
+
+try:
+    from rich.console import Console
+    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+from qmd.models.config import AppConfig
+
+
+class ModelDownloader:
+    """Parallel downloader supporting both HF and ModelScope."""
+
+    # Model definitions
+    MODELS = {
+        "embedding": {
+            "hf": "BAAI/bge-small-en-v1.5",
+            "ms": "XorPLM/bge-small-en-v1.5",
+            "size_mb": 130,
+            "type": "sentence-transformers"
+        },
+        "reranker": {
+            "hf": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "ms": "AI4Fun/ms-marco-MiniLM-L-6-v2",
+            "size_mb": 110,
+            "type": "cross-encoder"
+        },
+        "expansion": {
+            "hf": "Qwen/Qwen2.5-0.5B-Instruct",
+            "ms": "Qwen/Qwen2.5-0.5B-Instruct",
+            "size_mb": 1000,
+            "type": "llm"
+        }
+    }
+
+    def __init__(self, cache_dir: Optional[Path] = None):
+        """
+        Args:
+            cache_dir: Custom cache directory (default: ~/.cache/qmd/models/)
+        """
+        if cache_dir is None:
+            home = Path.home()
+            cache_dir = home / ".cache" / "qmd" / "models"
+
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        self.console = Console() if RICH_AVAILABLE else None
+
+    def _download_from_hf(self, model_name: str, local_path: Path) -> bool:
+        """Download from HuggingFace."""
+        try:
+            from transformers import AutoModel, AutoTokenizer
+            from huggingface_hub import snapshot_download
+
+            self.console.print(f"[cyan][HF]     Downloading {model_name}...[/cyan]" if self.console else f"[HF] Downloading {model_name}..."
+
+            # Download model files
+            snapshot_download(
+                repo_id=model_name,
+                local_dir=local_path,
+                local_dir_use_symlinks=False
+            )
+
+            self.console.print(f"[green][HF]     ✓ Downloaded to {local_path}[/green]" if self.console else f"[HF] Downloaded to {local_path}"
+            return True
+        except Exception as e:
+            self.console.print(f"[red][HF]     ✗ Failed: {e}[/red]" if self.console else f"[HF] Failed: {e}")
+            return False
+
+    def _download_from_ms(self, model_name: str, local_path: Path) -> bool:
+        """Download from ModelScope."""
+        try:
+            from modelscope.hub.api import HubApi
+
+            self.console.print(f"[cyan][ModelScope] Downloading {model_name}...[/cyan]" if self.console else f"[MoT] Downloading {model_name}..."
+
+            api = HubApi()
+            # Download model to local path
+            api.snapshot_download(
+                model_name,
+                cache_dir=str(local_path.parent)
+            )
+
+            # Move to exact path if needed
+            downloaded_path = local_path.parent / model_name.replace("/", "--")
+            if downloaded_path != local_path and downloaded_path.exists():
+                shutil.move(str(downloaded_path), str(local_path))
+
+            self.console.print(f"[green][ModelScope] ✓ Downloaded to {local_path}[/green]" if self.console else f"[MoT] Downloaded to {local_path}"
+            return True
+        except Exception as e:
+            self.console.print(f"[red][ModelScope] ✗ Failed: {e}[/red]" if self.console else f"[MoT] Failed: {e}")
+            return False
+
+    def _parallel_download(self, model_key: str, force: bool = False) -> Optional[Path]:
+        """Download from both sources in parallel, use fastest."""
+        if model_key not in self.MODELS:
+            raise ValueError(f"Unknown model: {model_key}")
+
+        model_info = self.MODELS[model_key]
+        model_name = model_info["type"] + "_" + model_key  # e.g., "embedding_reranker"
+        local_path = self.cache_dir / model_name
+
+        # Check if already exists
+        if local_path.exists() and not force:
+            if self.console:
+                self.console.print(f"[green]✓ Model already cached: {local_path}[/green]")
+            return local_path
+
+        if self.console:
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=self.console
+            ) as progress:
+                task1 = progress.add_task("[cyan][HF]     Downloading...", total=100)
+                task2 = progress.add_task("[cyan][MoT]    Downloading...", total=100)
+
+                # Parallel download
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = {
+                        executor.submit(self._download_from_hf, model_info["hf"], local_path): "hf",
+                        executor.submit(self._download_from_ms, model_info["ms"], local_path): "ms"
+                    }
+
+                    for future in as_completed(futures):
+                        if future.result():
+                            # Cancel remaining tasks
+                            for f in futures:
+                                f.cancel()
+                            progress.stop()
+                            return local_path
+
+        # Fallback without rich
+        else:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {
+                    executor.submit(self._download_from_hf, model_info["hf"], local_path): "hf",
+                    executor.submit(self._download_from_ms, model_info["ms"], local_path): "ms"
+                }
+
+                for future in as_completed(futures):
+                    if future.result():
+                        for f in futures:
+                            f.cancel()
+                        return local_path
+
+        self.console.print(f"[red]✗ All sources failed for {model_key}[/red]" if self.console else f"Failed to download {model_key}")
+        return None
+
+    def download_all(self, force: bool = False) -> Dict[str, Optional[Path]]:
+        """Download all required models.
+
+        Args:
+            force: Re-download even if cached
+
+        Returns:
+            Dict mapping model_key -> local_path or None if failed
+        """
+        results = {}
+
+        if self.console:
+            self.console.print(f"[bold yellow]Starting model download...[/bold yellow]")
+            self.console.print(f"[dim]Cache directory: {self.cache_dir}[/dim]")
+
+        for model_key in ["embedding", "reranker", "expansion"]:
+            results[model_key] = self._parallel_download(model_key, force)
+
+            if results[model_key] is None:
+                if self.console:
+                    self.console.print(f"[red]✗ Failed to download {model_key}[/red]")
+
+        if self.console:
+            self.console.print(f"[bold green]Download complete![/bold green]")
+            successful = sum(1 for p in results.values() if p is not None)
+            self.console.print(f"[dim]Successfully downloaded: {successful}/3 models[/dim]")
+
+        return results
+
+    def get_model_path(self, model_key: str) -> Optional[Path]:
+        """Get cached model path without downloading."""
+        model_name = self.MODELS[model_key]["type"] + "_" + model_key
+        local_path = self.cache_dir / model_name
+        return local_path if local_path.exists() else None
+
+    def check_availability(self) -> Dict[str, bool]:
+        """Check which models are already cached."""
+        return {
+            model_key: self.get_model_path(model_key) is not None
+            for model_key in self.MODELS.keys()
+        }
+
+
+def download_models_command():
+    """CLI command for downloading models."""
+    downloader = ModelDownloader()
+    downloader.download_all()
+
+
+if __name__ == "__main__":
+    download_models_command()

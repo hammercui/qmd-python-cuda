@@ -11,17 +11,28 @@ dependencies = [
     "chromadb>=0.4.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
-    "torch>=2.0.0",
-    "transformers>=4.30.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
+# CPU-only installation (default, most compatible)
+cpu = [
+    "torch>=2.0.0",  # CPU version
+    "fastembed>=0.2.0",
+    "transformers>=4.30.0",
+]
+# CUDA GPU installation (for RTX 1660Ti/2060/3060/4060+)
+cuda = [
+    "torch>=2.0.0+cu121",  # CUDA 12.1 (most stable for 1660Ti)
+    "fastembed-gpu>=0.2.0",  # GPU-accelerated embedding
+    "transformers>=4.30.0",
+]
+# Development dependencies
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-benchmark>=4.0.0",
     "ruff>=0.1.0",
-    "numpy>=1.24.0",
 ]
 
 [project.scripts]

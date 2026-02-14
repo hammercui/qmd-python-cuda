@@ -40,14 +40,58 @@
 
 ## 安装
 
+### 方式一：自动安装（推荐）
+
+**Windows:**
+```batch
+# 自动创建虚拟环境并安装
+scripts\setup.bat
+```
+
+**Linux/macOS:**
 ```bash
-pip install .
+# 自动创建虚拟环境并安装
+chmod +x scripts/setup.sh
+./scripts/setup.sh
+```
+
+脚本会自动：
+- ✅ 检测CUDA是否可用
+- ✅ 创建虚拟环境（.venv）
+- ✅ 安装对应版本（CPU或GPU）
+- ✅ 显示下一步操作
+
+### 方式二：手动安装
+
+**CPU版本（默认，最兼容）:**
+```bash
+# 创建虚拟环境
+python -m venv .venv
+
+# 激活（Windows）
+.venv\Scripts\activate
+# 激活（Linux/macOS）
+source .venv/bin/activate
+
+# 安装
+pip install -e .[cpu]
+```
+
+**GPU版本（需要CUDA 12.1+）:**
+```bash
+# 创建虚拟环境
+python -m venv .venv
+source .venv/bin/activate  # 或 .venv\Scripts\activate（Windows）
+
+# 安装GPU版本
+pip install -e .[cuda]
 ```
 
 **系统要求**:
 - Python 3.9+
 - Windows/Linux/macOS
-- 首次运行会自动下载模型（约1.24GB）
+- **GPU加速**: CUDA 12.1+（可选，CPU版本无需）
+- **磁盘空间**: 约1.24GB（模型）
 
 ## 快速开始
 
@@ -61,10 +105,34 @@ qmd collection add ~/docs --name my-docs
 qmd index
 ```
 
-### 3. 生成向量嵌入
+### 3. （首次运行）下载模型
+
+**方式一：自动下载所有模型（推荐）**
 ```bash
-qmd embed
+# 自动从HuggingFace或ModelScope下载（并行，取最快）
+python -m qmd.models.downloader
 ```
+
+**方式二：使用CLI检测并下载**
+```bash
+# 检测系统状态
+qmd check
+
+# 如果模型缺失，自动下载
+qmd check --download
+```
+
+**模型信息**:
+| 模型 | 大小 | 用途 |
+|------|------|------|
+| bge-small-en-v1.5 | 130MB | 向量嵌入 |
+| ms-marco-MiniLM-L-6-v2 | 110MB | 重排序 |
+| Qwen2.5-0.5B-Instruct | 1.0GB | 查询扩展 |
+| **总计** | **1.24GB** | - |
+
+**双源下载**: 同时从HuggingFace和ModelScope并行下载，自动使用最快的源。
+
+### 4. 生成向量嵌入
 
 ### 4. 搜索文档
 

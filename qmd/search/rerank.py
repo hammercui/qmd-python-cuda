@@ -1,17 +1,47 @@
 import os
-from typing import List, Dict, Any
- 
+from typing import List, Dict, Any, Optional
+from pathlib import Path
+
+from qmd.models.downloader import ModelDownloader
+
+
+def _get_device() -> str:
+    """Auto-detect best available device (cuda > mps > cpu)."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            return "mps"  # Apple Silicon
+        else:
+            return "cpu"
+    except ImportError:
+        return "cpu"
+
+
 class LLMReranker:
     """
     Reranker using local models (transformers).
     Query Expansion + Cross-Encoder for Reranking.
     """
-    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                 local_reranker_path: Optional[Path] = None,
+                 local_expansion_path: Optional[Path] = None):
+        """
+        Args:
+            model_name: HuggingFace model ID or local path
+            local_reranker_path: Local path for reranker model
+            local_expansion_path: Local path for expansion model
+        """
         self.model_name = model_name
+        self.local_reranker_path = local_reranker_path
+        self.local_expansion_path = local_expansion_path
         self._tokenizer = None
         self._model = None
         self._expansion_model = None
         self._expansion_tokenizer = None
+        self._device = _get_device()
+        self._downloader: Optional[ModelDownloader] = None
  
     @property
     def model(self):
@@ -20,8 +50,21 @@ class LLMReranker:
                 from transformers import AutoTokenizer, AutoModelForSequenceClassification
                 import torch
 
-                self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-                self._model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+                # Determine model path (local > download)
+                model_path = self.model_name
+                if self.local_reranker_path and self.local_reranker_path.exists():
+                    model_path = str(self.local_reranker_path)
+                else:
+                    # Try downloader cache
+                    if self._downloader is None:
+                        self._downloader = ModelDownloader()
+                    cached = self._downloader.get_model_path("reranker")
+                    if cached:
+                        model_path = str(cached)
+
+                self._tokenizer = AutoTokenizer.from_pretrained(model_path)
+                self._model = AutoModelForSequenceClassification.from_pretrained(model_path)
+                self._model.to(self._device)  # Move to detected device
                 self._model.eval()
                 self._torch = torch
             except ImportError:
@@ -35,10 +78,23 @@ class LLMReranker:
                 from transformers import AutoTokenizer, AutoModelForCausalLM
                 import torch
 
-                # Use Qwen3 for query expansion (local)
-                model_name = "Qwen/Qwen3-0.5B-Instruct"
-                self._expansion_tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self._expansion_model = AutoModelForCausalLM.from_pretrained(model_name)
+                # Determine model path (local > download)
+                model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+                model_path = model_name
+
+                if self.local_expansion_path and self.local_expansion_path.exists():
+                    model_path = str(self.local_expansion_path)
+                else:
+                    # Try downloader cache
+                    if self._downloader is None:
+                        self._downloader = ModelDownloader()
+                    cached = self._downloader.get_model_path("expansion")
+                    if cached:
+                        model_path = str(cached)
+
+                self._expansion_tokenizer = AutoTokenizer.from_pretrained(model_path)
+                self._expansion_model = AutoModelForCausalLM.from_pretrained(model_path)
+                self._expansion_model.to(self._device)  # Move to detected device
                 self._expansion_model.eval()
             except ImportError:
                 print("Warning: transformers or torch not installed. Query expansion will be disabled.")
@@ -56,6 +112,8 @@ Query: {query}
 """
 
             inputs = self._expansion_tokenizer(prompt, return_tensors="pt")
+            # Move inputs to device
+            inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
             with self._expansion_model._torch.no_grad():
                 outputs = self._expansion_model.generate(
@@ -99,6 +157,8 @@ Query: {query}
                     return_tensors="pt",
                     max_length=512
                 )
+                # Move inputs to same device as model
+                inputs = {k: v.to(self._device) for k, v in inputs.items()}
                 outputs = self._model(**inputs)
                 scores = outputs.logits.squeeze(-1)
                  
