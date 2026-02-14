@@ -82,6 +82,8 @@ HTTP Transport提供与MCP Tools功能对应的REST API端点，用于：
 
 ## HTTP端点规范
 
+### A. 搜索和检索指令（核心）
+
 ### 1. `POST /search` - BM25全文搜索
 
 **对应MCP Tool**: `search`
@@ -408,7 +410,238 @@ curl -X POST http://localhost:18765/embed \
 
 ---
 
-### 8. `GET /health` - 健康检查
+### B. 管理指令（必需）
+
+### 9. `POST /collections/add` - 添加文档集合
+
+**对应CLI**: `qmd collection add [path] --name <name> --mask <pattern>`
+
+**请求参数**:
+```json
+{
+  "name": "string (required)",
+  "path": "string (required)",
+  "glob_pattern": "string (optional, default: \"**/*.md\")"
+}
+```
+
+**响应格式**:
+```json
+{
+  "status": "added",
+  "name": "my-docs",
+  "path": "/path/to/docs",
+  "documents": 100,
+  "content": "Added collection 'my-docs' with 100 documents"
+}
+```
+
+**行为**:
+- ✅ 添加到配置文件
+- ✅ 扫描文档并添加到数据库
+- ✅ 队列串行处理
+
+---
+
+### 10. `GET /collections` - 列出所有集合
+
+**对应CLI**: `qmd collection list`
+
+**请求参数**: 无（GET请求）
+
+**响应格式**:
+```json
+{
+  "collections": [
+    {
+      "name": "my-docs",
+      "path": "/path/to/docs",
+      "pattern": "**/*.md",
+      "documents": 100
+    }
+  ],
+  "content": "Collections: 1\n- my-docs (100 docs)"
+}
+```
+
+---
+
+### 11. `GET /collections/{name}` - 获取集合详情
+
+**对应CLI**: -（隐含在collection list中）
+
+**请求参数**: 无（GET请求）
+
+**响应格式**:
+```json
+{
+  "name": "my-docs",
+  "path": "/path/to/docs",
+  "pattern": "**/*.md",
+  "documents": 100,
+  "last_indexed": "2025-06-18T12:34:56Z"
+}
+```
+
+---
+
+### 12. `DELETE /collections/{name}` - 删除集合
+
+**对应CLI**: `qmd collection remove <name>`
+
+**请求参数**: 无（DELETE请求）
+
+**响应格式**:
+```json
+{
+  "status": "removed",
+  "name": "my-docs",
+  "content": "Removed collection 'my-docs'"
+}
+```
+
+---
+
+### 13. `PUT /collections/{name}` - 重命名集合
+
+**对应CLI**: `qmd collection rename <old> <new>`
+
+**请求参数**:
+```json
+{
+  "new_name": "string (required)"
+}
+```
+
+**响应格式**:
+```json
+{
+  "status": "renamed",
+  "old_name": "my-docs",
+  "new_name": "my-docs-v2",
+  "content": "Renamed 'my-docs' to 'my-docs-v2'"
+}
+```
+
+---
+
+### C. 索引指令（必需）
+
+### 14. `POST /index` - 索引所有集合
+
+**对应CLI**: `qmd index`
+
+**请求参数**: 无（POST请求，空body）
+
+**响应格式**:
+```json
+{
+  "status": "indexed",
+  "collections": 1,
+  "total_documents": 1234,
+  "content": "Indexed 1 collection: 1234 documents"
+}
+```
+
+**行为**:
+- ✅ 扫描所有集合
+- ✅ 添加新文档到数据库
+- ✅ 更新已存在的文档
+- ✅ 队列串行处理
+
+---
+
+### 15. `POST /update` - 更新所有集合
+
+**对应CLI**: `qmd update [--pull]`
+
+**请求参数**:
+```json
+{
+  "pull": "boolean (optional, default: false)"
+}
+```
+
+**响应格式**:
+```json
+{
+  "status": "updated",
+  "collections": 1,
+  "content": "Updated 1 collection"
+}
+```
+
+**行为**:
+- ✅ 如果`pull=true`：先执行`git pull`
+- ✅ 重新索引所有集合
+- ✅ 队列串行处理
+
+---
+
+### D. 上下文指令（可选）
+
+### 16. `POST /contexts/add` - 添加上下文
+
+**对应CLI**: `qmd context add [path] "text"`
+
+**请求参数**:
+```json
+{
+  "path": "string (required)",
+  "text": "string (required)"
+}
+```
+
+**响应格式**:
+```json
+{
+  "status": "added",
+  "path": "/path/to/docs",
+  "content": "Added context for /path/to/docs"
+}
+```
+
+---
+
+### 17. `GET /contexts` - 列出所有上下文
+
+**对应CLI**: `qmd context list`
+
+**请求参数**: 无（GET请求）
+
+**响应格式**:
+```json
+{
+  "contexts": [
+    {
+      "path": "/path/to/docs",
+      "text": "Project documentation"
+    }
+  ]
+}
+```
+
+---
+
+### 18. `DELETE /contexts/{path}` - 删除上下文
+
+**对应CLI**: `qmd context rm <path>`
+
+**请求参数**: 无（DELETE请求）
+
+**响应格式**:
+```json
+{
+  "status": "removed",
+  "path": "/path/to/docs"
+}
+```
+
+---
+
+### E. 健康检查（必需）
+
+### 19. `GET /health` - 健康检查
 
 **用途**: 检查Server是否就绪
 
