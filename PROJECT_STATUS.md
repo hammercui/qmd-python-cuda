@@ -6,6 +6,50 @@
 
 ---
 
+## 🎯 架构演进（重要更新）
+
+### 新的统一架构（2026-02-15）
+
+**之前的设计问题**：
+- HTTP Server 和 MCP Server 作为两个独立实现
+- 代码重复（两个 Server 各自加载模型）
+- 两个进程 = 8GB+ VRAM（如果同时运行）
+
+**统一架构方案**（`docs/UNIFIED_SERVER_ARCHITECTURE.md`）：
+```
+QMD Server (单一进程，共享模型)
+├─ 核心引擎（单例：4GB VRAM）
+│  ├─ Embeddings (bge-small-zh-v1.5)
+│  ├─ BM25 搜索
+│  ├─ 向量搜索
+│  └─ 混合搜索
+│
+└─ 多种 Transport（对外接口）
+   ├─ HTTP Transport (port 8000)   ← CLI 命令用
+   ├─ MCP Transport (stdio)        ← Claude/OpenClaw 用
+   └─ SSE/WebSocket (可选)         ← 未来扩展
+```
+
+**核心优势**：
+- ✅ 单一进程，单一模型（4GB VRAM）
+- ✅ 代码复用（共享核心搜索引擎）
+- ✅ 维护简单（单一代码库）
+- ✅ 用户体验好（单一 `qmd server` 命令）
+
+**CLI 使用**：
+```bash
+qmd server --transport http    # 只启动 HTTP
+qmd server --transport mcp     # 只启动 MCP
+qmd server --transport both    # 同时启动（推荐）
+```
+
+**文档**：
+- `docs/UNIFIED_SERVER_ARCHITECTURE.md` - 统一架构详细方案
+- `docs/MCP_SERVER_PROPOSAL.md` - 方案概述（已更新为统一架构）
+- `docs/MCP_COMPATIBILITY_ANALYSIS.md` - MCP 接口规范
+
+---
+
 ## 📋 需求总结
 
 ### 核心问题
