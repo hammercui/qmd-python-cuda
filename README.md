@@ -151,6 +151,92 @@ qmd vsearch "semantic query"
 qmd query "智能查询扩展和重排序"
 ```
 
+## 配置文件
+
+### 配置文件位置
+
+QMD-Python使用YAML格式的配置文件：
+
+- **Windows**: `C:\Users\你的用户名\.qmd\index.yml`
+- **Linux/macOS**: `~/.qmd/index.yml`
+
+配置文件在首次运行时自动创建。
+
+### 基本配置
+
+```yaml
+# ~/.qmd/index.yml
+
+# 数据库路径（可选）
+db_path: "~/.qmd/qmd.db"
+
+# 模型下载源选择（重要）
+# 可选值：
+#   - "auto": 自动检测地理位置（默认）
+#              国内→ModelScope，海外→HuggingFace
+#   - "huggingface": 强制使用HuggingFace
+#   - "modelscope": 强制使用ModelScope
+model_source: "auto"
+
+# 文档集合列表
+collections:
+  - name: "my-docs"
+    path: "/path/to/documents"
+    glob_pattern: "**/*.md"
+```
+
+### 模型下载源详解
+
+#### `model_source: "auto"`（推荐，默认）
+
+**工作原理**：
+1. 检查系统时区（`Asia/Shanghai`/`Beijing`/`Chongqing` → 中国）
+2. 回退到IP检测（`ip-api.com`）
+3. 判定：
+   - **中国** → 使用 ModelScope（魔搭社区）
+   - **海外** → 使用 HuggingFace
+
+**适用场景**：
+- ✅ 国内用户（自动使用魔搭，下载更快）
+- ✅ 海外用户（自动使用HF）
+
+#### `model_source: "modelscope"`
+
+**特点**：
+- 🇨🇳 国内访问速度极快
+- 🚀 服务器位于中国大陆
+- ✅ 无需翻墙
+
+**适用场景**：
+- 国内用户
+- 网络不稳定时
+
+#### `model_source: "huggingface"`
+
+**特点**：
+- 🌍 全球最大模型社区
+- 📦 模型更新最快
+- 🌍 海外访问速度极快
+
+**适用场景**：
+- 海外用户
+- 有稳定翻墙环境
+
+### 配置命令
+
+**查看当前配置**：
+```bash
+qmd config show
+```
+
+**修改配置选项**：
+```bash
+# 设置数据库路径
+qmd config set db_path "custom/path/to/qmd.db"
+```
+
+**完整配置文档**: 参见 [配置文件使用指南](docs/CONFIG_GUIDE.md)
+
 ## 性能指标
 
 - **混合搜索**: 10k文档 <3秒
