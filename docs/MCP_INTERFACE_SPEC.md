@@ -344,7 +344,71 @@ curl http://localhost:18765/status
 
 ---
 
-### 7. `GET /health` - 健康检查
+### 7. `POST /embed` - 批量生成嵌入
+
+**用途**: 为多个文本生成向量嵌入（初始化或更新向量索引）
+
+**请求参数**:
+```json
+{
+  "texts": ["string (required)", ...]  // 文本列表（最多1000个）
+}
+```
+
+**响应格式**:
+```json
+{
+  "embeddings": [
+    [0.1, 0.2, ..., 0.8]  // 384维向量（text1）
+  ]
+}
+```
+
+**错误处理**:
+```json
+// 空列表
+{
+  "detail": "Empty texts list",
+  "status_code": 400
+}
+
+// 太多texts
+{
+  "detail": "Too many texts (1001 > 1000)",
+  "status_code": 413
+}
+
+// 模型未加载
+{
+  "detail": "Model not loaded",
+  "status_code": 503
+}
+```
+
+**限制**:
+- ✅ 最多1000个文本
+- ✅ 串行处理（队列）
+- ✅ 单例模型（4GB VRAM）
+
+**示例**:
+```bash
+# Request
+curl -X POST http://localhost:18765/embed \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["First text", "Second text"]}'
+
+# Response
+{
+  "embeddings": [
+    [0.123, 0.456, ..., 0.789],
+    [0.234, 0.567, ..., 0.890]
+  ]
+}
+```
+
+---
+
+### 8. `GET /health` - 健康检查
 
 **用途**: 检查Server是否就绪
 
