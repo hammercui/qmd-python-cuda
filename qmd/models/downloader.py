@@ -1,17 +1,17 @@
 """
-Multi-source model downloader with parallel HF + ModelScope support.
+Smart model downloader with geographic source detection.
 
 Features:
-- Parallel download from HuggingFace and ModelScope
+- Auto-detect China/Overseas location
+- Use ModelScope (default, China) or HuggingFace (overseas)
+- Configurable source in config file
 - Rich progress bars
-- Automatic fallback (use fastest completed)
 - Local caching at ~/.cache/qmd/models/
 """
 
 import os
 from pathlib import Path
 from typing import Optional, Dict, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 
 try:
@@ -22,6 +22,45 @@ except ImportError:
     RICH_AVAILABLE = False
 
 from qmd.models.config import AppConfig
+
+
+def _detect_location() -> str:
+    """
+    Detect if running in China or Overseas.
+
+    Returns: 'cn' for China, 'global' for overseas
+    """
+    try:
+        import requests
+
+        # Try to detect via timezone first (faster)
+        import time
+        import datetime
+
+        # Get timezone
+        if hasattr(time, 'tz'):
+            tz = time.tzname
+            if tz and 'Asia/Shanghai' in tz:
+                return 'cn'
+            if tz and ('Asia/Beijing' in tz or 'Asia/Chongqing' in tz or 'Asia/Harbin' in tz):
+                return 'cn'
+
+        # Fallback: Check via IP (slower)
+        try:
+            response = requests.get('http://ip-api.com/json/', timeout=3)
+            if response.status_code == 200:
+                data = response.json()
+                country = data.get('country_code', '').upper()
+                if country == 'CN':
+                    return 'cn'
+        except:
+            pass
+
+    except Exception:
+        pass
+
+    # Default: Assume China for faster downloads for Chinese users
+    return 'cn'
 
 
 class ModelDownloader:
@@ -49,10 +88,11 @@ class ModelDownloader:
         }
     }
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Optional[Path] = None, model_source: Optional[str] = None):
         """
         Args:
             cache_dir: Custom cache directory (default: ~/.cache/qmd/models/)
+            model_source: 'auto' (detect), 'huggingface', 'modelscope'
         """
         if cache_dir is None:
             home = Path.home()
@@ -63,13 +103,24 @@ class ModelDownloader:
 
         self.console = Console() if RICH_AVAILABLE else None
 
-    def _download_from_hf(self, model_name: str, local_path: Path) -> bool:
+        # Determine download source
+        if model_source is None:
+            # Load from config
+            try:
+                config = AppConfig.load()
+                model_source = config.model_source
+            except:
+                model_source = "auto"
+
+        self.model_source = model_source
+
+    def _download_from_hf(self, model_name: str, local_path: Path, progress=None, task=None) -> bool:
         """Download from HuggingFace."""
         try:
-            from transformers import AutoModel, AutoTokenizer
             from huggingface_hub import snapshot_download
 
-            self.console.print(f"[cyan][HF]     Downloading {model_name}...[/cyan]" if self.console else f"[HF] Downloading {model_name}..."
+            if self.console and progress and task:
+                progress.update(task, description=f"[cyan][HF] Downloading {model_name}...")
 
             # Download model files
             snapshot_download(
@@ -78,18 +129,22 @@ class ModelDownloader:
                 local_dir_use_symlinks=False
             )
 
-            self.console.print(f"[green][HF]     ✓ Downloaded to {local_path}[/green]" if self.console else f"[HF] Downloaded to {local_path}"
+            if self.console and progress and task:
+                progress.update(task, completed=100)
+                self.console.print(f"[green][HF] ✓ Downloaded to {local_path}[/green]")
             return True
         except Exception as e:
-            self.console.print(f"[red][HF]     ✗ Failed: {e}[/red]" if self.console else f"[HF] Failed: {e}")
+            if self.console and progress and task:
+                self.console.print(f"[red][HF] ✗ Failed: {e}[/red]")
             return False
 
-    def _download_from_ms(self, model_name: str, local_path: Path) -> bool:
+    def _download_from_ms(self, model_name: str, local_path: Path, progress=None, task=None) -> bool:
         """Download from ModelScope."""
         try:
             from modelscope.hub.api import HubApi
 
-            self.console.print(f"[cyan][ModelScope] Downloading {model_name}...[/cyan]" if self.console else f"[MoT] Downloading {model_name}..."
+            if self.console and progress and task:
+                progress.update(task, description=f"[cyan][MoT] Downloading {model_name}...")
 
             api = HubApi()
             # Download model to local path
@@ -103,14 +158,40 @@ class ModelDownloader:
             if downloaded_path != local_path and downloaded_path.exists():
                 shutil.move(str(downloaded_path), str(local_path))
 
-            self.console.print(f"[green][ModelScope] ✓ Downloaded to {local_path}[/green]" if self.console else f"[MoT] Downloaded to {local_path}"
+            if self.console and progress and task:
+                progress.update(task, completed=100)
+                self.console.print(f"[green][MoT] ✓ Downloaded to {local_path}[/green]")
             return True
         except Exception as e:
-            self.console.print(f"[red][ModelScope] ✗ Failed: {e}[/red]" if self.console else f"[MoT] Failed: {e}")
+            if self.console and progress and task:
+                self.console.print(f"[red][MoT] ✗ Failed: {e}[/red]")
             return False
 
+    def _select_source(self, model_key: str) -> str:
+        """Select download source based on location and config."""
+        model_info = self.MODELS[model_key]
+
+        # Explicit source specified
+        if self.model_source in ["huggingface", "modelscope"]:
+            source_type = "hf" if self.model_source == "huggingface" else "ms"
+            return model_info[source_type]
+
+        # Auto-detect location
+        location = _detect_location()
+
+        if location == 'cn':
+            # China: Use ModelScope
+            if self.console:
+                self.console.print(f"[dim]Detected location: China - Using ModelScope[/dim]")
+            return model_info["ms"]
+        else:
+            # Overseas: Use HuggingFace
+            if self.console:
+                self.console.print(f"[dim]Detected location: Overseas - Using HuggingFace[/dim]")
+            return model_info["hf"]
+
     def _parallel_download(self, model_key: str, force: bool = False) -> Optional[Path]:
-        """Download from both sources in parallel, use fastest."""
+        """Download model from selected source (HF or ModelScope)."""
         if model_key not in self.MODELS:
             raise ValueError(f"Unknown model: {model_key}")
 
@@ -124,7 +205,11 @@ class ModelDownloader:
                 self.console.print(f"[green]✓ Model already cached: {local_path}[/green]")
             return local_path
 
+        # Select source based on location
+        source = self._select_source(model_key)
+
         if self.console:
+            source_name = "ModelScope" if "modelscope" in source.lower() else "HuggingFace"
             with Progress(
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
@@ -132,39 +217,27 @@ class ModelDownloader:
                 TimeRemainingColumn(),
                 console=self.console
             ) as progress:
-                task1 = progress.add_task("[cyan][HF]     Downloading...", total=100)
-                task2 = progress.add_task("[cyan][MoT]    Downloading...", total=100)
+                task = progress.add_task(f"[cyan][{source_name}] Downloading {model_key}...", total=100)
 
-                # Parallel download
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    futures = {
-                        executor.submit(self._download_from_hf, model_info["hf"], local_path): "hf",
-                        executor.submit(self._download_from_ms, model_info["ms"], local_path): "ms"
-                    }
+                # Try to download from selected source
+                if "modelscope" in source.lower():
+                    success = self._download_from_ms(source, local_path, progress, task)
+                else:
+                    success = self._download_from_hf(source, local_path, progress, task)
 
-                    for future in as_completed(futures):
-                        if future.result():
-                            # Cancel remaining tasks
-                            for f in futures:
-                                f.cancel()
-                            progress.stop()
-                            return local_path
+                if success:
+                    return local_path
 
         # Fallback without rich
         else:
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = {
-                    executor.submit(self._download_from_hf, model_info["hf"], local_path): "hf",
-                    executor.submit(self._download_from_ms, model_info["ms"], local_path): "ms"
-                }
+            if "modelscope" in source.lower():
+                if self._download_from_ms(source, local_path, None, None):
+                    return local_path
+            else:
+                if self._download_from_hf(source, local_path, None, None):
+                    return local_path
 
-                for future in as_completed(futures):
-                    if future.result():
-                        for f in futures:
-                            f.cancel()
-                        return local_path
-
-        self.console.print(f"[red]✗ All sources failed for {model_key}[/red]" if self.console else f"Failed to download {model_key}")
+        self.console.print(f"[red]✗ Download failed for {model_key}[/red]" if self.console else f"Failed to download {model_key}")
         return None
 
     def download_all(self, force: bool = False) -> Dict[str, Optional[Path]]:

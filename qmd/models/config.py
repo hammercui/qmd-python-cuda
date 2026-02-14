@@ -19,6 +19,9 @@ class AppConfig(BaseModel):
     db_path: str = Field(default_factory=lambda: str(get_default_config_dir() / "qmd.db"))
     collections: List[CollectionConfig] = []
 
+    # Model download source: "auto" (detect location), "huggingface", "modelscope"
+    model_source: str = "auto"
+
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "AppConfig":
         config_path = path or get_default_config_path()
