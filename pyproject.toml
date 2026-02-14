@@ -1,0 +1,22 @@
+[project]
+name = "qmd-python"
+version = "0.1.0"
+description = "Query Markup Documents in Python"
+authors = [
+    {name = "Your Name", email = "you@example.com"},
+]
+dependencies = [
+    "click>=8.1.0",
+    "rich>=12.0.0",
+    "chromadb>=0.4.0",
+    "llama-cpp-python>=0.2.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+qmd = "qmd.cli:cli"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
