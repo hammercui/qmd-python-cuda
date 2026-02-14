@@ -23,7 +23,8 @@
 
 | 文档 | 说明 | 用途 |
 |------|------|------|
-| **[MCP_COMPATIBILITY_ANALYSIS.md](./MCP_COMPATIBILITY_ANALYSIS.md)** | MCP接口规范和兼容性分析 | 开发参考 |
+| **[MCP_INTERFACE_SPEC.md](./MCP_INTERFACE_SPEC.md)** | MCP接口详细规范（6 Tools + 1 Resource + 1 Prompt） | 开发实现参考 |
+| **[MCP_COMPATIBILITY_ANALYSIS.md](./MCP_COMPATIBILITY_ANALYSIS.md)** | MCP兼容性分析（为什么需要兼容） | 理解背景 |
 
 ---
 
