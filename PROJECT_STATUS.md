@@ -24,10 +24,15 @@ QMD Server (单一进程，共享模型)
 │  ├─ 向量搜索
 │  └─ 混合搜索
 │
+├─ 自动服务发现（2026-02-15 新增）
+│  ├─ 端口检测（默认18765，冲突时递增）
+│  ├─ 端口存储（~/.qmd/server_port.txt）
+│  └─ 进程检测（psutil）
+│
 └─ 多种 Transport（对外接口）
-   ├─ HTTP Transport (port 8000)   ← CLI 命令用
-   ├─ MCP Transport (stdio)        ← Claude/OpenClaw 用
-   └─ SSE/WebSocket (可选)         ← 未来扩展
+   ├─ HTTP Transport (port 18765)   ← CLI 命令用
+   ├─ MCP Transport (stdio)          ← Claude/OpenClaw 用
+   └─ SSE/WebSocket (可选)          ← 未来扩展
 ```
 
 **核心优势**：
@@ -35,10 +40,15 @@ QMD Server (单一进程，共享模型)
 - ✅ 代码复用（共享核心搜索引擎）
 - ✅ 维护简单（单一代码库）
 - ✅ 用户体验好（单一 `qmd server` 命令）
+- ✅ **自动服务发现**（2026-02-15 新增）
+  - OpenClaw无需手动启动Server
+  - 端口冲突自动递增
+  - 进程检测避免重复启动
+  - 零配置体验
 
 **CLI 使用**：
 ```bash
-qmd server --transport http    # 只启动 HTTP
+qmd server --transport http    # 只启动 HTTP（默认18765）
 qmd server --transport mcp     # 只启动 MCP
 qmd server --transport both    # 同时启动（推荐）
 ```
@@ -248,6 +258,7 @@ qmd server --transport both    # 同时启动（推荐）
 
 | 阶段 | 状态 | 完成度 |
 |--------|------|----------|
+| 0. 自动服务发现 | ⏳ | 0% |
 | 1. Server 核心模块 | ✅ | 100% |
 | 2. LLMEngine 双模式 | ✅ | 100% |
 | 3. CLI 集成 | ✅ | 100% |
@@ -255,15 +266,201 @@ qmd server --transport both    # 同时启动（推荐）
 | 5. 单元测试 | ✅ | 100% |
 | 6. 代码质量改进 | ✅ | 100% |
 | 7. 集成测试与验证 | ⏳ | 0% |
-| 8. 文档完善 | ✅ | 90% |
+| 8. 文档完善 | ✅ | 100% |
 | 9. 发布准备 | ⏳ | 0% |
 | 10. OpenClaw 集成 | ⏳ | 0% |
 
-**整体完成度**：**75%** (6/8 阶段完成，集成测试与发布待进行）
+**整体完成度**：**75%** (6/9 阶段完成，集成测试与自动服务发现待进行）
+
+**2026-02-15 更新**：
+- ✅ 文档完成（添加自动服务发现机制设计）
+- ⏳ 待实现：Phase 0（自动服务发现）
 
 ---
 
 ## 📝 未完成内容（与 OpenClaw 交互）
+
+### 阶段 0：自动服务发现机制（2026-02-15 新增，P0）
+
+#### 0.1 端口检测和递增
+- **任务**：实现端口可用性检测和自动递增
+- **文件**：`qmd/server/port_manager.py`（新建）
+- **实现内容**：
+  - ✅ `find_available_port(start_port=18765, max_attempts=100)` → int
+  - ✅ `save_server_port(port)` → 保存到 `~/.qmd/server_port.txt`
+  - ✅ `get_saved_port()` → int | None
+- **测试**：
+  ```bash
+  # 测试端口检测
+  python -c "from qmd.server.port_manager import find_available_port; print(find_available_port())"
+  # 预期：输出可用端口号（如18765）
+
+  # 测试端口保存
+  python -c "from qmd.server.port_manager import save_server_port; save_server_port(18766)"
+  # 预期：~/.qmd/server_port.txt 包含 18766
+  ```
+
+#### 0.2 进程检测
+- **任务**：检测QMD Server进程是否运行
+- **文件**：`qmd/server/process.py`（新建）
+- **实现内容**：
+  - ✅ `find_server_processes()` → list[psutil.Process]
+  - ✅ `get_server_port_from_process(proc)` → int | None
+  - ✅ `kill_server_processes()` → void（可选，用于调试）
+- **测试**：
+  ```bash
+  # 启动一个server进程
+  qmd server &
+
+  # 测试进程检测
+  python -c "from qmd.server.process import find_server_processes; print(len(find_server_processes()))"
+  # 预期：输出 1（找到1个server进程）
+  ```
+
+#### 0.3 智能连接和自动启动
+- **任务**：Client端实现智能服务发现
+- **文件**：`qmd/server/client.py`（修改）
+- **实现内容**：
+  - ✅ `_discover_server()` → str（核心逻辑）
+    1. 尝试连接 localhost:18765
+    2. 读取 `~/.qmd/server_port.txt`
+    3. 检查进程是否存在
+    4. 进程不存在则自动启动
+  - ✅ `_try_connect(url, timeout=1.0)` → bool
+  - ✅ `_is_server_running()` → bool
+  - ✅ `_auto_start_server()` → str
+- **测试**：
+  ```bash
+  # 测试1：无server，自动启动
+  python -c "from qmd.server.client import EmbedServerClient; c = EmbedServerClient(); print(c.base_url)"
+  # 预期：自动启动server，输出 http://localhost:18765
+
+  # 测试2：server已运行，直接连接
+  qmd server &  # Terminal 1
+  python -c "from qmd.server.client import EmbedServerClient; c = EmbedServerClient(); print(c.base_url)"  # Terminal 2
+  # 预期：直接连接成功，不启动新进程
+  ```
+
+#### 0.4 CLI命令更新
+- **任务**：更新`qmd server`命令使用新端口
+- **文件**：`qmd/cli.py`（修改，第67行）
+- **修改内容**：
+  ```python
+  # 修改前
+  @click.option("--port", default=8000, type=int, ...)
+
+  # 修改后
+  @click.option("--port", default=18765, type=int, help="Port to bind to (auto-increment if occupied)")
+
+  # 启动时调用端口检测
+  from qmd.server.port_manager import find_available_port, save_server_port
+
+  actual_port = find_available_port(port)
+  if actual_port != port:
+      console.print(f"[yellow]Port {port} occupied, using {actual_port}[/yellow]")
+
+  save_server_port(actual_port)
+  uvicorn.run(app, host=host, port=actual_port)
+  ```
+- **测试**：
+  ```bash
+  # 测试默认端口
+  qmd server
+  # 预期：Starting on port 18765
+
+  # 测试端口冲突
+  # 占用18765：python -m http.server 18765 &
+  qmd server
+  # 预期：Port 18765 occupied, using 18766
+  ```
+
+#### 0.5 依赖添加
+- **任务**：添加新依赖到 `pyproject.toml`
+- **修改内容**：
+  ```toml
+  [project.optional-dependencies]
+  server = [
+      "fastapi>=0.100.0",
+      "uvicorn[standard]>=0.23.0",
+      "httpx>=0.24.0",
+      "psutil>=5.9.0",     # 新增：进程检测
+      "requests>=2.28.0",   # 新增：HTTP连接检测
+  ]
+  ```
+- **测试**：
+  ```bash
+  # 安装server依赖
+  pip install -e .[server]
+
+  # 验证依赖
+  pip list | grep -E "psutil|requests"
+  # 预期：显示psutil和requests版本
+  ```
+
+#### 0.6 集成测试
+- **任务**：测试OpenClaw场景下的自动服务发现
+- **测试场景**：
+  1. **场景1：首次使用（无server）**
+     ```bash
+     # 不启动server
+     # 执行搜索
+     qmd search "test query"
+     # 预期：
+     # 1. 日志：QMD server not running, auto-starting...
+     # 2. 日志：Starting on port 18765
+     # 3. 搜索成功返回
+     ```
+
+  2. **场景2：Server已运行**
+     ```bash
+     # Terminal 1: 启动server
+     qmd server
+
+     # Terminal 2: 执行搜索
+     qmd search "test query"
+     # 预期：
+     # 1. 直接连接成功
+     # 2. 日志：Using existing server at http://localhost:18765
+     # 3. 搜索成功返回
+     ```
+
+  3. **场景3：端口冲突**
+     ```bash
+     # Terminal 1: 占用18765
+     python -m http.server 18765
+
+     # Terminal 2: 执行搜索
+     qmd search "test query"
+     # 预期：
+     # 1. 自动启动server（使用18766）
+     # 2. 日志：Port 18765 occupied, using 18766
+     # 3. 搜索成功返回
+     ```
+
+  4. **场景4：Server退出后重启**
+     ```bash
+     # Terminal 1: 启动server
+     qmd server
+     # Ctrl+C 停止server
+
+     # Terminal 2: 执行搜索
+     qmd search "test query"
+     # 预期：
+     # 1. 检测到server不可用
+     # 2. 自动启动新server
+     # 3. 搜索成功返回
+     ```
+
+**估算时间**：
+- 端口检测和递增：1小时
+- 进程检测：1小时
+- 智能连接和自动启动：1.5小时
+- CLI命令更新：30分钟
+- 依赖添加：10分钟
+- 集成测试：1.5小时
+- **总计**：**5-6小时**
+
+---
 
 ### 阶段 7：集成测试与验证（下一步）
 
@@ -538,9 +735,14 @@ wait
 ## 🎯 下一步（推荐优先级）
 
 ### 优先级 P0（核心功能）
-1. **集成测试**：执行阶段 7 的所有测试场景
-2. **Bug 修复**：根据测试结果修复发现的问题
-3. **性能验证**：确保 Server 模式延迟 < 100ms
+1. **自动服务发现实现**（阶段 0）：5-6小时
+   - 端口检测和递增
+   - 进程检测
+   - 智能连接和自动启动
+   - 集成测试
+2. **集成测试**：执行阶段 7 的所有测试场景
+3. **Bug 修复**：根据测试结果修复发现的问题
+4. **性能验证**：确保 Server 模式延迟 < 100ms
 
 ### 优先级 P1（完善功能）
 1. **Resource 实现**：qmd:// URI 访问（兼容性）
