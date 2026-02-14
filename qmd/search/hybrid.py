@@ -4,21 +4,31 @@ from .vector import VectorSearch, SearchResult
 from ..database.manager import DatabaseManager
 from collections import defaultdict
 
+
 class HybridSearcher:
     """
     Hybrid search combining BM25 and Vector search using RRF.
+
+    Args:
+        db: Database manager
+        vector_db_dir: Directory for ChromaDB persistence
+        mode: Embedding mode - "auto", "standalone", or "server"
+        server_url: MCP Server URL (used when mode="server")
     """
-    def __init__(self, db: DatabaseManager, vector_db_dir: str = ".qmd_vector_db"):
+
+    def __init__(
+        self,
+        db: DatabaseManager,
+        vector_db_dir: str = ".qmd_vector_db",
+        mode: str = "auto",
+        server_url: str = "http://localhost:8000",
+    ):
         self.fts = FTSSearcher(db)
-        self.vector = VectorSearch(vector_db_dir)
+        self.vector = VectorSearch(vector_db_dir, mode=mode, server_url=server_url)
         self.db = db
 
     def search(
-        self, 
-        query: str, 
-        collection: Optional[str] = None, 
-        limit: int = 10,
-        k: int = 60
+        self, query: str, collection: Optional[str] = None, limit: int = 10, k: int = 60
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search using Reciprocal Rank Fusion (RRF).
@@ -29,11 +39,13 @@ class HybridSearcher:
         fts_results = self.fts.search(query, limit=limit * 2)
         if collection:
             fts_results = [r for r in fts_results if r["collection"] == collection]
-        
+
         # 2. Get Vector results
         # Vector score: higher is better. Results are already sorted.
-        vector_results = self.vector.search(query, collection or "default", limit=limit * 2)
-        
+        vector_results = self.vector.search(
+            query, collection or "default", limit=limit * 2
+        )
+
         # 3. RRF Fusion
         scores = defaultdict(float)
         doc_info = {}
@@ -46,8 +58,10 @@ class HybridSearcher:
                 "title": res["title"],
                 "collection": res["collection"],
                 "path": res["path"],
-                "content": res.get("content", ""), # FTS might not have full content by default
-                "type": "fts"
+                "content": res.get(
+                    "content", ""
+                ),  # FTS might not have full content by default
+                "type": "fts",
             }
 
         # Process Vector results
@@ -60,21 +74,17 @@ class HybridSearcher:
                     "collection": res.collection,
                     "path": res.path,
                     "content": res.content,
-                    "type": "vector"
+                    "type": "vector",
                 }
             else:
                 doc_info[doc_id]["type"] = "hybrid"
 
         # 4. Sort and format
         sorted_ids = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        
+
         final_results = []
         for doc_id, score in sorted_ids[:limit]:
             info = doc_info[doc_id]
-            final_results.append({
-                "id": doc_id,
-                "score": score,
-                **info
-            })
-            
+            final_results.append({"id": doc_id, "score": score, **info})
+
         return final_results
