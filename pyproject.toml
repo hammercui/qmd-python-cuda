@@ -27,6 +27,12 @@ cuda = [
     "fastembed-gpu>=0.2.0",  # GPU-accelerated embedding
     "transformers>=4.30.0",
 ]
+# MCP Server dependencies (for low VRAM systems)
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "httpx>=0.24.0",
+]
 # Development dependencies
 dev = [
     "pytest>=7.0.0",

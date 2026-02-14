@@ -56,6 +56,37 @@ def config_set(ctx_obj, key, value):
     else:
         console.print(f"[red]Error:[/red] Unknown key '{key}'")
 
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Host to bind to")
+@click.option("--port", default=8000, type=int, help="Port to bind to")
+@click.option("--log-level", default="info", help="Log level")
+def server(host, port, log_level):
+    """Start the QMD MCP Server for embedding service"""
+    import logging
+    import signal
+    import sys
+    
+    logging.basicConfig(level=getattr(logging, log_level.upper()))
+    
+    import uvicorn
+    from qmd.server.app import app
+    
+    console.print(f"[cyan]Starting QMD MCP Server[/cyan]")
+    console.print(f"Host: [magenta]{host}[/magenta], Port: [magenta]{port}[/magenta]")
+    console.print(f"[dim]Embed model: BAAI/bge-small-en-v1.5[/dim]")
+    console.print(f"[dim]VRAM usage: Single model instance (~2-4GB)[/dim]")
+    console.print(f"[dim]Max queue size: 100 requests[/dim]")
+    console.print("[yellow]Press Ctrl+C to stop[/yellow]")
+    
+    def signal_handler(sig, frame):
+        console.print("\n[yellow]Shutting down server...[/yellow]")
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
+
 @cli.group()
 def collection():
     """Manage document collections"""
