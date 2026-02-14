@@ -9,9 +9,19 @@ dependencies = [
     "click>=8.1.0",
     "rich>=12.0.0",
     "chromadb>=0.4.0",
-    "llama-cpp-python>=0.2.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-benchmark>=4.0.0",
+    "ruff>=0.1.0",
+    "numpy>=1.24.0",
 ]
 
 [project.scripts]
@@ -20,3 +30,15 @@ qmd = "qmd.cli:cli"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "--cov=qmd --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+source = ["qmd"]
+omit = [
+    "tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+fail_under = 80.0
+precision = 2

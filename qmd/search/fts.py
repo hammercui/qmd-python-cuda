@@ -26,6 +26,7 @@ class FTSSearcher:
                         d.path, 
                         d.hash, 
                         d.title,
+                        snippet(c.doc, -2, '[b]', '[/b]', 30) as snippet,
                         c.doc as content
                     FROM documents_fts
                     JOIN documents d ON documents_fts.rowid = d.id
@@ -38,22 +39,14 @@ class FTSSearcher:
                 )
                 results = [dict(row) for row in cursor.fetchall()]
             except Exception as e:
-                # Fallback to a simpler query if FTS fails
+                # Fallback to simpler query if FTS fails
                 # This handles cases where even quoting doesn't help
                 print(f"FTS search error: {e}")
                 return []
             
-            # Add rank and snippet
+            # Add rank (snippet already provided by FTS5)
             for i, res in enumerate(results, 1):
                 res["rank"] = i
-                # Simple snippet: first 100 chars with query highlighted
-                content = res.get("content", "")
-                # Use the original query for highlighting
-                start = content.lower().find(query.lower())
-                if start != -1:
-                    snippet = content[max(0, start-30):start+len(query)+30]
-                    res["snippet"] = f"...{snippet}..."
-                else:
-                    res["snippet"] = content[:100] + "..."
+                # FTS5 snippet is already included in results
             
             return results

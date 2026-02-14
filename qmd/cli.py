@@ -470,11 +470,13 @@ def embed(ctx_obj, collection):
     if not docs:
         console.print("[yellow]No documents to embed.[/yellow]")
         return
-
+    
     console.print(f"Embedding [cyan]{len(docs)}[/cyan] documents...")
     
     from collections import defaultdict
     import numpy as np
+    import time
+    from rich.progress import Progress
     
     by_col = defaultdict(list)
     for d in docs:
@@ -490,23 +492,44 @@ def embed(ctx_obj, collection):
             "metadata": {"path": d["path"], "title": d["title"]}
         })
     
-    for col_name, col_docs in by_col.items():
-        console.print(f"  Processing collection: [cyan]{col_name}[/cyan] ({len(col_docs)} docs)")
-        to_embed = [doc for doc in col_docs if doc["embedding"] is None]
-        cached = [doc for doc in col_docs if doc["embedding"] is not None]
+    total_to_embed = sum(
+        len([doc for doc in col_docs if doc["embedding"] is None])
+        for col_docs in by_col.values()
+    )
+    
+    with Progress() as progress:
+        task = progress.add_task("[cyan]Embedding...[/cyan]", total=total_to_embed)
         
-        if to_embed:
-            console.print(f"    Embedding {len(to_embed)} new documents...")
-            contents = [doc["content"] for doc in to_embed]
-            new_embeddings = vsearch.llm.embed_texts(contents)
+        for col_name, col_docs in by_col.items():
+            console.print(f"  Processing collection: [cyan]{col_name}[/cyan] ({len(col_docs)} docs)")
+            to_embed = [doc for doc in col_docs if doc["embedding"] is None]
+            cached = [doc for doc in col_docs if doc["embedding"] is not None]
             
-            for i, doc in enumerate(to_embed):
-                doc["embedding"] = new_embeddings[i]
-                ctx_obj.db.update_content_embedding(doc["hash"], np.array(new_embeddings[i], dtype=np.float32).tobytes())
+            if to_embed:
+                start = time.time()
+                contents = [doc["content"] for doc in to_embed]
+                new_embeddings = vsearch.llm.embed_texts(contents)
+                
+                elapsed = time.time() - start
+                rate = len(to_embed) / elapsed if elapsed > 0 else 0
+                
+                # Estimate remaining time
+                remaining = total_to_embed - progress.tasks[task].completed
+                if rate > 0 and remaining > 0:
+                    eta = remaining / rate
+                    progress.update(task, completed=len(to_embed),
+                                description=f"[cyan]{col_name}[/cyan] ({len(to_embed)} new, {int(eta)}s remaining)")
+                else:
+                    progress.update(task, completed=len(to_embed))
+                
+                for i, doc in enumerate(to_embed):
+                    doc["embedding"] = new_embeddings[i]
+                    ctx_obj.db.update_content_embedding(doc["hash"], np.array(new_embeddings[i], dtype=np.float32).tobytes())
+            
+            if cached:
+                progress.update(task, completed=len(cached))
+                console.print(f"    Using cached embeddings for {len(cached)} documents")
         
-        if cached:
-            console.print(f"    Using cached embeddings for {len(cached)} documents")
-            
         vsearch.add_documents_with_embeddings(col_name, col_docs)
     
     console.print("[bold green]Embedding complete![/bold green]")
