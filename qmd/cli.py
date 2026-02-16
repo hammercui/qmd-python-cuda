@@ -10,8 +10,27 @@ from .search.rerank import LLMReranker
 from .models.config import AppConfig, CollectionConfig
 from .models.downloader import ModelDownloader
 import os
+import sys
 
 console = Console()
+
+
+def _check_virtual_env():
+    """Check if running in a virtual environment."""
+    in_venv = (
+        hasattr(sys, "real_prefix") or
+        (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
+    )
+
+    if not in_venv:
+        console.print("[yellow]Warning: Not running in a virtual environment[/yellow]")
+        console.print("[dim]Recommendation: Create and activate a virtual environment[/dim]")
+        console.print("[dim]  python -m venv .venv[/dim]")
+        console.print("[dim]  .venv\\Scripts\\activate  (Windows)[/dim]")
+        console.print("[dim]  source .venv/bin/activate  (Linux/macOS)[/dim]")
+        console.print("")
+
+    return in_venv
 
 
 class Context:
@@ -24,6 +43,7 @@ class Context:
 @click.pass_context
 def cli(ctx):
     """QMD - Query Markup Documents"""
+    _check_virtual_env()
     ctx.obj = Context()
 
 
