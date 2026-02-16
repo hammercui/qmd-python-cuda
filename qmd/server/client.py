@@ -18,7 +18,7 @@ from .process import find_server_processes
 logger = logging.getLogger(__name__)
 
 
-class QmdHttpClient:
+class EmbedServerClient:
     """
     Client for communicating with the QMD MCP Server.
 
@@ -139,7 +139,7 @@ class QmdHttpClient:
                     logger.info(f"Server started successfully on port {port}")
                     return url
 
-            raise RuntimeError(f"Server failed to start within 10 seconds")
+            raise RuntimeError("Server failed to start within 10 seconds")
 
         except Exception as e:
             raise RuntimeError(f"Failed to start server: {e}")
@@ -187,13 +187,15 @@ class QmdHttpClient:
             logger.warning(f"Cannot connect to MCP server at {self.base_url}")
             return None
         except httpx.TimeoutException:
-            logger.warning(f"MCP server timeout")
+            logger.warning("MCP server timeout")
             return None
         except Exception as e:
             logger.error(f"MCP server error: {e}")
             return None
 
-    def vsearch(self, query: str, limit: int = 10, min_score: float = 0.3) -> Optional[list]:
+    def vsearch(
+        self, query: str, limit: int = 10, min_score: float = 0.3
+    ) -> Optional[list]:
         """
         Vector semantic search.
 
@@ -209,7 +211,7 @@ class QmdHttpClient:
             client = self._get_client()
             response = client.post(
                 f"{self.base_url}/vsearch",
-                json={"query": query, "limit": limit, "min_score": min_score}
+                json={"query": query, "limit": limit, "min_score": min_score},
             )
             response.raise_for_status()
 
@@ -220,7 +222,9 @@ class QmdHttpClient:
             logger.error(f"Vector search error: {e}")
             return None
 
-    def query(self, query: str, limit: int = 10, min_score: float = 0.0) -> Optional[list]:
+    def query(
+        self, query: str, limit: int = 10, min_score: float = 0.0
+    ) -> Optional[list]:
         """
         Hybrid search (BM25 + vector + LLM expansion).
 
@@ -236,7 +240,7 @@ class QmdHttpClient:
             client = self._get_client()
             response = client.post(
                 f"{self.base_url}/query",
-                json={"query": query, "limit": limit, "min_score": min_score}
+                json={"query": query, "limit": limit, "min_score": min_score},
             )
             response.raise_for_status()
 

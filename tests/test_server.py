@@ -1,7 +1,6 @@
 """Basic tests for MCP Server functionality."""
 
 import pytest
-import asyncio
 from qmd.server.app import create_app
 from qmd.server.client import QmdHttpClient
 from fastapi.testclient import TestClient
@@ -36,8 +35,6 @@ def test_embed_endpoint_empty_texts(test_client):
 
 def test_embed_endpoint_too_many_texts(test_client):
     """Test embed endpoint with too many texts."""
-    import json
-
     # Create list with 1001 texts
     texts = ["test"] * 1001
     response = test_client.post("/embed", json={"texts": texts})
@@ -45,10 +42,9 @@ def test_embed_endpoint_too_many_texts(test_client):
 
 
 def test_client_health_check(monkeypatch):
-    """Test EmbedServerClient health check."""
-    # Mock successful response
-    import httpx
+    """Test QmdHttpClient health check."""
 
+    # Mock successful response
     class MockResponse:
         status_code = 200
 
@@ -59,15 +55,19 @@ def test_client_health_check(monkeypatch):
     def mock_get_client(self):
         return MockClient()
 
-    monkeypatch.setattr(EmbedServerClient, "_get_client", mock_get_client)
+    def mock_discover_server(self):
+        return "http://localhost:18765"
 
-    client = EmbedServerClient()
+    # Mock both _discover_server and _get_client
+    monkeypatch.setattr(QmdHttpClient, "_get_client", mock_get_client)
+    monkeypatch.setattr(QmdHttpClient, "_discover_server", mock_discover_server)
+
+    client = QmdHttpClient()
     assert client.health_check() is True
 
 
 def test_client_embed_texts(monkeypatch):
-    """Test EmbedServerClient embed_texts method."""
-    import httpx
+    """Test QmdHttpClient embed_texts method."""
 
     class MockResponse:
         status_code = 200
@@ -79,15 +79,20 @@ def test_client_embed_texts(monkeypatch):
             pass
 
     class MockClient:
-        def post(self, url, json_data):
+        def post(self, url, json=None, **kwargs):
             return MockResponse()
 
     def mock_get_client(self):
         return MockClient()
 
-    monkeypatch.setattr(EmbedServerClient, "_get_client", mock_get_client)
+    def mock_discover_server(self):
+        return "http://localhost:18765"
 
-    client = EmbedServerClient()
+    # Mock both _discover_server and _get_client
+    monkeypatch.setattr(QmdHttpClient, "_get_client", mock_get_client)
+    monkeypatch.setattr(QmdHttpClient, "_discover_server", mock_discover_server)
+
+    client = QmdHttpClient()
     result = client.embed_texts(["text1", "text2"])
 
     assert result is not None

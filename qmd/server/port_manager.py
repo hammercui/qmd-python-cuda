@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Default port
 DEFAULT_PORT = 18765
-PORT_FILE = ".qmd/server_port.txt"
+PORT_FILE = "server_port.txt"
 
 
 def find_available_port(start_port=DEFAULT_PORT, max_attempts=100) -> int:
