@@ -2,7 +2,7 @@
 
 import pytest
 from qmd.server.app import create_app
-from qmd.server.client import QmdHttpClient
+from qmd.server.client import EmbedServerClient
 from fastapi.testclient import TestClient
 
 
@@ -42,7 +42,7 @@ def test_embed_endpoint_too_many_texts(test_client):
 
 
 def test_client_health_check(monkeypatch):
-    """Test QmdHttpClient health check."""
+    """Test EmbedServerClient health check."""
 
     # Mock successful response
     class MockResponse:
@@ -59,15 +59,15 @@ def test_client_health_check(monkeypatch):
         return "http://localhost:18765"
 
     # Mock both _discover_server and _get_client
-    monkeypatch.setattr(QmdHttpClient, "_get_client", mock_get_client)
-    monkeypatch.setattr(QmdHttpClient, "_discover_server", mock_discover_server)
+    monkeypatch.setattr(EmbedServerClient, "_get_client", mock_get_client)
+    monkeypatch.setattr(EmbedServerClient, "_discover_server", mock_discover_server)
 
-    client = QmdHttpClient()
+    client = EmbedServerClient()
     assert client.health_check() is True
 
 
 def test_client_embed_texts(monkeypatch):
-    """Test QmdHttpClient embed_texts method."""
+    """Test EmbedServerClient embed_texts method."""
 
     class MockResponse:
         status_code = 200
@@ -89,10 +89,10 @@ def test_client_embed_texts(monkeypatch):
         return "http://localhost:18765"
 
     # Mock both _discover_server and _get_client
-    monkeypatch.setattr(QmdHttpClient, "_get_client", mock_get_client)
-    monkeypatch.setattr(QmdHttpClient, "_discover_server", mock_discover_server)
+    monkeypatch.setattr(EmbedServerClient, "_get_client", mock_get_client)
+    monkeypatch.setattr(EmbedServerClient, "_discover_server", mock_discover_server)
 
-    client = QmdHttpClient()
+    client = EmbedServerClient()
     result = client.embed_texts(["text1", "text2"])
 
     assert result is not None
