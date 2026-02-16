@@ -64,7 +64,7 @@ def config_set(ctx_obj, key, value):
 
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
-@click.option("--port", default=8000, type=int, help="Port to bind to")
+@click.option("--port", default=18765, type=int, help="Port to bind to (auto-increment if occupied)")
 @click.option("--log-level", default="info", help="Log level")
 def server(host, port, log_level):
     """Start the QMD MCP Server for embedding service"""
@@ -76,9 +76,18 @@ def server(host, port, log_level):
 
     import uvicorn
     from qmd.server.app import app
+    from qmd.server.port_manager import find_available_port, save_server_port
+
+    # Port detection and auto-increment
+    actual_port = find_available_port(port)
+    if actual_port != port:
+        console.print(f"[yellow]Port {port} occupied, using {actual_port}[/yellow]")
+
+    # Save port for auto-discovery
+    save_server_port(actual_port)
 
     console.print(f"[cyan]Starting QMD MCP Server[/cyan]")
-    console.print(f"Host: [magenta]{host}[/magenta], Port: [magenta]{port}[/magenta]")
+    console.print(f"Host: [magenta]{host}[/magenta], Port: [magenta]{actual_port}[/magenta]")
     console.print(f"[dim]Embed model: BAAI/bge-small-en-v1.5[/dim]")
     console.print(f"[dim]VRAM usage: Single model instance (~2-4GB)[/dim]")
     console.print(f"[dim]Max queue size: 100 requests[/dim]")
@@ -91,7 +100,7 @@ def server(host, port, log_level):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    uvicorn.run(app, host=host, port=port, log_level=log_level)
+    uvicorn.run(app, host=host, port=actual_port, log_level=log_level)
 
 
 @cli.group()
@@ -638,96 +647,79 @@ def embed(ctx_obj, collection, mode):
 @click.argument("query")
 @click.option("--collection", help="Collection to search in")
 @click.option("--limit", default=5, help="Number of results")
-@click.option(
-    "--mode",
-    default="auto",
-    type=click.Choice(["auto", "standalone", "server"]),
-    help="Embedding mode: auto (default), standalone (local model), server (MCP server)",
-)
 @click.pass_obj
-def vsearch(ctx_obj, query, collection, limit, mode):
-    """Semantic search using vector embeddings"""
-    vsearch = VectorSearch(mode=mode)
-    collections = (
-        [collection] if collection else [c.name for c in ctx_obj.config.collections]
-    )
+def vsearch(ctx_obj, query, collection, limit):
+    """Semantic search using vector embeddings (via HTTP Server)"""
+    from qmd.server.client import EmbedServerClient
 
-    all_results = []
-    for col_name in collections:
-        results = vsearch.search(query, col_name, limit=limit)
-        all_results.extend(results)
+    console.print(f"[dim]Searching via QMD Server...[/dim]")
 
-    all_results.sort(key=lambda x: x.score, reverse=True)
-    all_results = all_results[:limit]
+    try:
+        client = EmbedServerClient()
+        results = client.vsearch(query, limit=limit)
 
-    if not all_results:
-        console.print("[yellow]No results found.[/yellow]")
-        return
+        if not results:
+            console.print("[yellow]No results found.[/yellow]")
+            return
 
-    table = Table(title=f"Semantic Search Results for: {query}")
-    table.add_column("Score", style="green")
-    table.add_column("Title", style="cyan")
-    table.add_column("Collection", style="magenta")
-    table.add_column("Path", style="white")
+        table = Table(title=f"Semantic Search Results for: {query}")
+        table.add_column("Score", style="green")
+        table.add_column("Title", style="cyan")
+        table.add_column("Collection", style="magenta")
+        table.add_column("Path", style="white")
 
-    for r in all_results:
-        table.add_row(
-            f"{r.score:.4f}", r.metadata.get("title", "N/A"), r.collection, r.path
-        )
+        for r in results:
+            table.add_row(
+                f"{r.get('score', 0):.4f}",
+                r.get('title', 'N/A'),
+                r.get('collection', 'N/A'),
+                r.get('path', 'N/A')
+            )
 
-    console.print(table)
+        console.print(table)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
 
 
 @cli.command()
 @click.argument("query")
 @click.option("--collection", help="Collection to search in")
 @click.option("--limit", default=5, help="Number of results")
-@click.option("--rerank/--no-rerank", default=True, help="Enable LLM reranking")
-@click.option(
-    "--mode",
-    default="auto",
-    type=click.Choice(["auto", "standalone", "server"]),
-    help="Embedding mode: auto (default), standalone (local model), server (MCP server)",
-)
 @click.pass_obj
-def query(ctx_obj, query, collection, limit, rerank, mode):
-    """Hybrid search (BM25 + Vector) with optional reranking"""
-    hybrid = HybridSearcher(ctx_obj.db, mode=mode)
+def query(ctx_obj, query, collection, limit):
+    """Hybrid search (BM25 + Vector) via HTTP Server"""
+    from qmd.server.client import EmbedServerClient
+
     console.print(f"Searching for: [bold cyan]{query}[/bold cyan]...")
-    results = hybrid.search(query, collection=collection, limit=limit * 2)
+    console.print("[dim]Using QMD Server (hybrid search)[/dim]")
 
-    if not results:
-        console.print("[yellow]No results found.[/yellow]")
-        return
+    try:
+        client = EmbedServerClient()
+        results = client.query(query, limit=limit)
 
-    if rerank:
-        console.print("Reranking results...")
-        reranker = LLMReranker()
-        expanded_queries = reranker.expand_query(query)
-        if len(expanded_queries) > 1:
-            console.print(f"  Expanded queries: {', '.join(expanded_queries[1:])}")
-        results = reranker.rerank(query, results, top_k=limit)
-    else:
-        results = results[:limit]
+        if not results:
+            console.print("[yellow]No results found.[/yellow]")
+            return
 
-    table = Table(title=f"Hybrid Search Results for: {query}")
-    table.add_column("Rank", style="dim")
-    table.add_column("Score", style="green")
-    table.add_column("Title", style="cyan")
-    table.add_column("Collection", style="magenta")
-    table.add_column("Type", style="yellow")
+        table = Table(title=f"Hybrid Search Results for: {query}")
+        table.add_column("Rank", style="dim")
+        table.add_column("Score", style="green")
+        table.add_column("Title", style="cyan")
+        table.add_column("Collection", style="magenta")
 
-    for i, r in enumerate(results, 1):
-        score = r.get("rerank_score", r.get("score", 0.0))
-        table.add_row(
-            str(i),
-            f"{score:.4f}",
-            r.get("title", "N/A"),
-            r.get("collection", "N/A"),
-            r.get("type", "hybrid"),
-        )
+        for i, r in enumerate(results, 1):
+            table.add_row(
+                str(i),
+                f"{r.get('score', 0):.4f}",
+                r.get('title', 'N/A'),
+                r.get('collection', 'N/A'),
+            )
 
-    console.print(table)
+        console.print(table)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
 
 
 @cli.command()

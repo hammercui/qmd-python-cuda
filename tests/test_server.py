@@ -3,7 +3,7 @@
 import pytest
 import asyncio
 from qmd.server.app import create_app
-from qmd.server.client import EmbedServerClient
+from qmd.server.client import QmdHttpClient
 from fastapi.testclient import TestClient
 
 
@@ -30,23 +30,17 @@ def test_health_endpoint(test_client):
 
 def test_embed_endpoint_empty_texts(test_client):
     """Test embed endpoint with empty texts list."""
-    response = test_client.post(
-        "/embed",
-        json={"texts": []}
-    )
+    response = test_client.post("/embed", json={"texts": []})
     assert response.status_code == 400  # Bad Request
 
 
 def test_embed_endpoint_too_many_texts(test_client):
     """Test embed endpoint with too many texts."""
     import json
-    
+
     # Create list with 1001 texts
     texts = ["test"] * 1001
-    response = test_client.post(
-        "/embed",
-        json={"texts": texts}
-    )
+    response = test_client.post("/embed", json={"texts": texts})
     assert response.status_code == 413  # Payload Too Large
 
 
@@ -54,19 +48,19 @@ def test_client_health_check(monkeypatch):
     """Test EmbedServerClient health check."""
     # Mock successful response
     import httpx
-    
+
     class MockResponse:
         status_code = 200
-    
+
     class MockClient:
         def get(self, url):
             return MockResponse()
-    
+
     def mock_get_client(self):
         return MockClient()
-    
+
     monkeypatch.setattr(EmbedServerClient, "_get_client", mock_get_client)
-    
+
     client = EmbedServerClient()
     assert client.health_check() is True
 
@@ -74,33 +68,28 @@ def test_client_health_check(monkeypatch):
 def test_client_embed_texts(monkeypatch):
     """Test EmbedServerClient embed_texts method."""
     import httpx
-    
+
     class MockResponse:
         status_code = 200
-        
+
         def json(self):
-            return {
-                "embeddings": [
-                    [0.1] * 384,
-                    [0.2] * 384
-                ]
-            }
-        
+            return {"embeddings": [[0.1] * 384, [0.2] * 384]}
+
         def raise_for_status(self):
             pass
-    
+
     class MockClient:
         def post(self, url, json_data):
             return MockResponse()
-    
+
     def mock_get_client(self):
         return MockClient()
-    
+
     monkeypatch.setattr(EmbedServerClient, "_get_client", mock_get_client)
-    
+
     client = EmbedServerClient()
     result = client.embed_texts(["text1", "text2"])
-    
+
     assert result is not None
     assert len(result) == 2
     assert len(result[0]) == 384
