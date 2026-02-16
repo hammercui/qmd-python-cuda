@@ -72,10 +72,12 @@ def create_app() -> FastAPI:
         global _vector_search
         if _vector_search is None:
             from qmd.search.vector import VectorSearch
-            from qmd.database.manager import DatabaseManager
 
-            db = DatabaseManager(_config.db_path)
-            _vector_search = VectorSearch(db, _model)
+            _vector_search = VectorSearch(
+                db_dir=".qmd_vector_db",
+                mode="auto",
+                server_url="http://localhost:8000"  # Default, will use auto-detect
+            )
             logger.info("VectorSearch initialized")
         return _vector_search
 
@@ -87,7 +89,12 @@ def create_app() -> FastAPI:
             from qmd.database.manager import DatabaseManager
 
             db = DatabaseManager(_config.db_path)
-            _hybrid_search = HybridSearcher(db, _model)
+            _hybrid_search = HybridSearcher(
+                db=db,
+                vector_db_dir=".qmd_vector_db",
+                mode="auto",
+                server_url="http://localhost:8000"
+            )
             logger.info("HybridSearcher initialized")
         return _hybrid_search
 
@@ -133,10 +140,12 @@ def create_app() -> FastAPI:
             searcher = _get_vector_search()
             results = searcher.search(
                 request.query,
-                limit=request.limit,
-                min_score=request.min_score
+                collection_name=request.collection or "todo",
+                limit=request.limit
             )
-            return VSearchResponse(results=results)
+            # Convert SearchResult objects to dicts
+            results_dicts = [r.dict() for r in results]
+            return VSearchResponse(results=results_dicts)
 
         except Exception as e:
             logger.error(f"Vector search error: {e}")
@@ -152,8 +161,8 @@ def create_app() -> FastAPI:
             searcher = _get_hybrid_search()
             results = searcher.search(
                 request.query,
-                limit=request.limit,
-                min_score=request.min_score
+                collection=request.collection or "todo",
+                limit=request.limit
             )
             return QueryResponse(results=results)
 
