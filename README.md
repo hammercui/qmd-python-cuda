@@ -245,11 +245,25 @@ qmd config set db_path "custom/path/to/qmd.db"
 
 ## 文档
 
-详细技术分析请查看：
-- [技术栈对比](docs/report/TECH_STACK_ANALYSIS.md) - GGUF vs PyTorch
-- [兼容性分析](docs/report/COMPATIBILITY_ANALYSIS.md) - 为什么模型更换不影响工具集成
-- [模型清单](docs/report/MODEL_INVENTORY.md) - 完整模型使用说明
-- [审计报告](docs/report/AUDIT_REPORT.md) - 合规性评估（85% → 95%）
+### 📋 项目管理
+- [任务看板](../syncthing/obsidian-mark/8.TODO/公司/qmd-python/00-任务看板.md) - 当前开发任务
+- [项目里程碑](../syncthing/obsidian-mark/8.TODO/公司/qmd-python/03-项目里程碑.md) - 进度追踪
+- [工作流程](../syncthing/obsidian-mark/8.TODO/公司/qmd-python/WORKFLOW.md) - 开发流程指南
+
+### 🏗️ 架构文档
+- [统一服务器架构](docs/UNIFIED_SERVER_ARCHITECTURE.md) - 单一进程 + 多 Transport
+- [架构决策记录](docs/ARCHITECTURE_DECISION_2026-02-15.md) - Client-Server 分离决策
+- [MCP 接口规范](docs/MCP_INTERFACE_SPEC.md) - 6 Tools + 1 Resource + 1 Prompt
+- [自动服务发现](docs/AUTO_SERVER_DISCOVERY.md) - 零配置服务发现机制
+
+### 📚 历史文档（已归档）
+详细技术分析已移至 `docs/_to_delete/` 目录：
+- 技术栈对比（GGUF vs PyTorch）
+- 兼容性分析
+- 模型清单
+- 审计报告
+
+详见：[文档清理报告](docs/DOC_CLEANUP_REPORT.md)
 
 ## 开发致谢
 

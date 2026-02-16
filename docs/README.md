@@ -1,6 +1,12 @@
 # QMD-Python 文档索引
 
-**最后更新**: 2026-02-15
+**最后更新**: 2026-02-16
+
+---
+
+## 📑 完整文档目录
+
+> **[DOCS_INDEX.md](./DOCS_INDEX.md)** - 完整的项目文档索引（包含所有文档的大小、更新时间、统计信息）
 
 ---
 
@@ -30,28 +36,12 @@
 
 ## 📂 归档文档
 
-### 技术报告（`report/`）
+以下文档已移动到 `_to_delete/` 目录供参考：
 
-| 文档 | 说明 |
-|------|------|
-| [TECH_STACK_ANALYSIS.md](./report/TECH_STACK_ANALYSIS.md) | 技术栈分析（GGUF vs PyTorch） |
-| [COMPATIBILITY_ANALYSIS.md](./report/COMPATIBILITY_ANALYSIS.md) | 兼容性分析 |
-| [MODEL_INVENTORY.md](./report/MODEL_INVENTORY.md) | 模型清单 |
-| [AUDIT_REPORT.md](./report/AUDIT_REPORT.md) | 审计报告 |
-| [MEMORY_ANALYSIS.md](./report/MEMORY_ANALYSIS.md) | 内存分析 |
-| [FIX_SUMMARY.md](./report/FIX_SUMMARY.md) | 修复总结 |
-| [TECH_STACK_VARIANCE.md](./report/TECH_STACK_VARIANCE.md) | 技术栈差异 |
+- **技术报告** (`_to_delete/report/`) - 8 个审计和分析报告（2026-02-14）
+- **需求文档** (`_to_delete/requirement/`) - 6 个需求规格文档（2026-02-14）
 
-### 需求文档（`requirement/`）
-
-| 文档 | 说明 |
-|------|------|
-| [01-root-cause-analysis.md](./requirement/01-root-cause-analysis.md) | 根因分析 |
-| [02-design-document.md](./requirement/02-design-document.md) | 设计文档 |
-| [03-requirements.md](./requirement/03-requirements.md) | 需求说明 |
-| [04-testing.md](./requirement/04-testing.md) | 测试计划 |
-| [05-metrics.md](./requirement/05-metrics.md) | 性能指标 |
-| [06-models.md](./requirement/06-models.md) | 模型说明 |
+详见：[DOC_CLEANUP_REPORT.md](./DOC_CLEANUP_REPORT.md)
 
 ---
 
@@ -70,7 +60,11 @@
 
 ### 性能优化
 
-参考 `report/` 目录下的技术报告
+参考 **[ARCHITECTURE_DECISION_2026-02-15.md](./ARCHITECTURE_DECISION_2026-02-15.md)** - 性能优化决策和效果分析
+
+### 历史报告
+
+如需查看初期的审计和分析报告，请参阅 `_to_delete/` 目录。
 
 ---
 
@@ -100,4 +94,4 @@
 ---
 
 **维护者**: QMD-Python Team
-**最后更新**: 2026-02-15
+**最后更新**: 2026-02-16

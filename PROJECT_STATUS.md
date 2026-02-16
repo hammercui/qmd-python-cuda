@@ -8,6 +8,43 @@
 
 ## 🎯 架构演进（重要更新）
 
+### 核心架构理解（2026-02-15 13:20 - Boss确认）
+
+**问题本质**：
+```
+3个模型实例 × 4GB显存/个 = 12GB显存爆炸
+
+解决方案：
+单进程Server + 1套模型 + 队列串行 = 4GB显存 ✅
+```
+
+**Client-Server分离策略**：
+- ✅ **必须分离**：所有需要模型的操作走Server
+- ✅ **HTTP MCP Server**：不是stdio模式
+- ✅ **队列串行**：防止显存溢出
+- ✅ **智能路由**：不需要模型的操作直接CLI
+
+**操作分类**：
+
+| 操作类型 | 需要模型 | 执行方式 | 理由 |
+|---------|---------|---------|------|
+| **embed** | ✅ | HTTP → Server | 需要bge模型 |
+| **vsearch** | ✅ | HTTP → Server | 需要embed + 向量搜索 |
+| **query** | ✅ | HTTP → Server | 需要embed + reranker + LLM扩展 |
+| **search** | ❌ | 直接CLI | BM25纯算法 |
+| **collection add** | ❌ | 直接CLI | SQLite操作 |
+| **collection list** | ❌ | 直接CLI | SQLite查询 |
+| **index** | ❌ | 直接CLI | 文件读取 + SQLite写入 |
+| **config** | ❌ | 直接CLI | YAML配置 |
+| **status** | ⚠️ | 混合 | Server状态→HTTP，CLI状态→直接 |
+
+**核心价值**：
+- ✅ 显存节省：66%（4GB vs 12GB）
+- ✅ 性能提升：CLI操作零等待
+- ✅ 架构清晰：职责分离
+
+---
+
 ### 新的统一架构（2026-02-15）
 
 **之前的设计问题**：
