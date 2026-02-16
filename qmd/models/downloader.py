@@ -131,11 +131,11 @@ class ModelDownloader:
 
             if self.console and progress and task:
                 progress.update(task, completed=100)
-                self.console.print(f"[green][HF] ✓ Downloaded to {local_path}[/green]")
+                self.console.print(f"[green][HF] OK Downloaded to {local_path}[/green]")
             return True
         except Exception as e:
             if self.console and progress and task:
-                self.console.print(f"[red][HF] ✗ Failed: {e}[/red]")
+                self.console.print(f"[red][HF] X Failed: {e}[/red]")
             return False
 
     def _download_from_ms(self, model_name: str, local_path: Path, progress=None, task=None) -> bool:
@@ -160,11 +160,11 @@ class ModelDownloader:
 
             if self.console and progress and task:
                 progress.update(task, completed=100)
-                self.console.print(f"[green][MoT] ✓ Downloaded to {local_path}[/green]")
+                self.console.print(f"[green][MoT] OK Downloaded to {local_path}[/green]")
             return True
         except Exception as e:
             if self.console and progress and task:
-                self.console.print(f"[red][MoT] ✗ Failed: {e}[/red]")
+                self.console.print(f"[red][MoT] X Failed: {e}[/red]")
             return False
 
     def _select_source(self, model_key: str) -> str:
@@ -202,7 +202,7 @@ class ModelDownloader:
         # Check if already exists
         if local_path.exists() and not force:
             if self.console:
-                self.console.print(f"[green]✓ Model already cached: {local_path}[/green]")
+                self.console.print(f"[green]OK Model already cached: {local_path}[/green]")
             return local_path
 
         # Select source based on location
@@ -237,7 +237,7 @@ class ModelDownloader:
                 if self._download_from_hf(source, local_path, None, None):
                     return local_path
 
-        self.console.print(f"[red]✗ Download failed for {model_key}[/red]" if self.console else f"Failed to download {model_key}")
+        self.console.print(f"[red]X Download failed for {model_key}[/red]" if self.console else f"Failed to download {model_key}")
         return None
 
     def download_all(self, force: bool = False) -> Dict[str, Optional[Path]]:
@@ -260,7 +260,7 @@ class ModelDownloader:
 
             if results[model_key] is None:
                 if self.console:
-                    self.console.print(f"[red]✗ Failed to download {model_key}[/red]")
+                    self.console.print(f"[red]X Failed to download {model_key}[/red]")
 
         if self.console:
             self.console.print(f"[bold green]Download complete![/bold green]")
