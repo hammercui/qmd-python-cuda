@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "qmd-python"
 version = "0.1.0"
@@ -14,8 +18,9 @@ dependencies = [
     "numpy>=1.24.0",
 ]
 
-[tool.setuptools]
-packages = ["qmd"]
+[tool.setuptools.packages.find]
+include = ["qmd*"]
+exclude = ["test_docs*", "node_modules*", "tests*"]
 
 [project.optional-dependencies]
 # CPU-only installation (default, most compatible)

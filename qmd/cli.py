@@ -778,9 +778,9 @@ def check(ctx_obj, download):
     try:
         import fastembed
 
-        deps_status["fastembed"] = ("✓", "Installed")
+        deps_status["fastembed"] = ("OK", "Installed")
     except ImportError:
-        deps_status["fastembed"] = ("✗", "Not installed")
+        deps_status["fastembed"] = ("X", "Not installed")
 
     # Check device
     console.print("\n[bold]Device:[/bold]")
@@ -789,12 +789,12 @@ def check(ctx_obj, download):
 
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
-            console.print(f"  [green]✓ CUDA[/green]: {gpu_name}")
+            console.print(f"  [green]OK CUDA[/green]: {gpu_name}")
             console.print(f"  [dim]CUDA Version: {torch.version.cuda}[/dim]")
         else:
-            console.print(f"  [yellow]⚠ CPU-only[/yellow] (No CUDA detected)")
+            console.print(f"  [yellow]WARN CPU-only[/yellow] (No CUDA detected)")
     except ImportError:
-        console.print(f"  [red]✗ Cannot detect (torch not installed)[/red]")
+        console.print(f"  [red]X Cannot detect (torch not installed)[/red]")
 
     # Check models
     console.print("\n[bold]Models:[/bold]")
@@ -802,7 +802,7 @@ def check(ctx_obj, download):
     availability = downloader.check_availability()
 
     for model_key, available in availability.items():
-        status = "[green]✓[/green]" if available else "[red]✗[/red]"
+        status = "[green]OK[/green]" if available else "[red]X[/red]"
         size_mb = downloader.MODELS[model_key]["size_mb"]
         console.print(f"  {status} {model_key.capitalize():12} ({size_mb}MB)")
 
