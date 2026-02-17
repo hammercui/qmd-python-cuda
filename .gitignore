@@ -110,3 +110,5 @@ site/
 node_modules
 package-lock.json
 nul
+
+.ruff
