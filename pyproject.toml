@@ -30,9 +30,22 @@ cpu = [
     "transformers>=4.30.0",
 ]
 # CUDA GPU installation (for RTX 1660Ti/2060/3060/4060+)
+# 安装方式: pip install -e ".[cuda]" --index-url https://download.pytorch.org/whl/cu121
 cuda = [
     "torch>=2.0.0",
-    "fastembed-gpu>=0.2.0",
+    "fastembed-gpu>=0.7.0",
+    "transformers>=4.30.0",
+]
+# CUDA 12.1 specific (recommended for Windows + NVIDIA GPUs)
+cuda121 = [
+    "torch>=2.5.0",
+    "fastembed-gpu>=0.7.0",
+    "transformers>=4.30.0",
+]
+# CUDA 12.4 specific (latest)
+cuda124 = [
+    "torch>=2.5.0",
+    "fastembed-gpu>=0.7.0",
     "transformers>=4.30.0",
 ]
 # MCP Server dependencies (for low VRAM systems)

@@ -782,17 +782,40 @@ def check(ctx_obj, download):
     except ImportError:
         deps_status["fastembed"] = ("X", "Not installed")
 
-    # Check device
+    # Check device and CUDA
     console.print("\n[bold]Device:[/bold]")
     try:
         import torch
+        import platform
 
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
+            gpu_count = torch.cuda.device_count()
             console.print(f"  [green]OK CUDA[/green]: {gpu_name}")
+            console.print(f"  [dim]GPU Count: {gpu_count}[/dim]")
             console.print(f"  [dim]CUDA Version: {torch.version.cuda}[/dim]")
+            console.print(f"  [dim]PyTorch Version: {torch.__version__}[/dim]")
+
+            # Check each GPU
+            for i in range(gpu_count):
+                props = torch.cuda.get_device_properties(i)
+                vram_gb = props.total_memory / (1024**3)
+                console.print(f"  [dim]GPU {i}: {props.name} ({vram_gb:.1f} GB, Compute {props.major}.{props.minor})[/dim]")
         else:
+            system = platform.system()
             console.print(f"  [yellow]WARN CPU-only[/yellow] (No CUDA detected)")
+            console.print(f"  [dim]OS: {system}[/dim]")
+            console.print(f"  [dim]PyTorch Version: {torch.__version__}[/dim]")
+
+            # Provide install instructions based on OS
+            if system == "Windows":
+                console.print("\n  [cyan]To enable CUDA on Windows:[/cyan]")
+                console.print("  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y")
+                console.print("  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+            elif system == "Linux":
+                console.print("\n  [cyan]To enable CUDA on Linux:[/cyan]")
+                console.print("  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y")
+                console.print("  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
     except ImportError:
         console.print(f"  [red]X Cannot detect (torch not installed)[/red]")
 

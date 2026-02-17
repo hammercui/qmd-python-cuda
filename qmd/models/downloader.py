@@ -72,19 +72,22 @@ class ModelDownloader:
             "hf": "BAAI/bge-small-en-v1.5",
             "ms": "XorPLM/bge-small-en-v1.5",
             "size_mb": 130,
-            "type": "sentence-transformers"
+            "type": "sentence-transformers",
+            "gguf": "hf:ggml-org/embeddinggemma-300M-Q8_0-GGUF"
         },
         "reranker": {
             "hf": "cross-encoder/ms-marco-MiniLM-L-6-v2",
             "ms": "AI4Fun/ms-marco-MiniLM-L-6-v2",
             "size_mb": 110,
-            "type": "cross-encoder"
+            "type": "cross-encoder",
+            "gguf": "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf"
         },
         "expansion": {
             "hf": "Qwen/Qwen2.5-0.5B-Instruct",
             "ms": "Qwen/Qwen2.5-0.5B-Instruct",
             "size_mb": 1000,
-            "type": "llm"
+            "type": "llm",
+            "gguf": "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf"
         }
     }
 
@@ -270,10 +273,17 @@ class ModelDownloader:
         return results
 
     def get_model_path(self, model_key: str) -> Optional[Path]:
-        """Get cached model path without downloading."""
+        """Get cached model path without downloading.
+
+        Returns directory path for PyTorch models, None for GGUF (used separately).
+        """
+        # Try directory model first (PyTorch/safetensors)
         model_name = self.MODELS[model_key]["type"] + "_" + model_key
         local_path = self.cache_dir / model_name
-        return local_path if local_path.exists() else None
+        if local_path.exists() and local_path.is_dir():
+            return local_path
+
+        return None
 
     def check_availability(self) -> Dict[str, bool]:
         """Check which models are already cached."""

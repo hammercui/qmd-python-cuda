@@ -162,8 +162,22 @@ class LLMEngine:
         # Load model
         from fastembed import TextEmbedding
 
+        # Detect GPU providers
+        providers = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Use CUDA for faster inference
+                providers = ["CUDAExecutionProvider"]
+                logger.info("Using CUDAExecutionProvider for fastembed")
+        except ImportError:
+            pass
+
         self._model = TextEmbedding(
-            model_name=model_path, cache_dir=self.cache_dir, threads=self.threads
+            model_name=model_path,
+            cache_dir=self.cache_dir,
+            threads=self.threads,
+            providers=providers
         )
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:

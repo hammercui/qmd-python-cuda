@@ -53,13 +53,15 @@ class LLMReranker:
                 # Determine model path (local > download)
                 model_path = self.model_name
                 if self.local_reranker_path and self.local_reranker_path.exists():
-                    model_path = str(self.local_reranker_path)
+                    # Check if directory is not empty
+                    if any(self.local_reranker_path.iterdir()):
+                        model_path = str(self.local_reranker_path)
                 else:
                     # Try downloader cache
                     if self._downloader is None:
                         self._downloader = ModelDownloader()
                     cached = self._downloader.get_model_path("reranker")
-                    if cached:
+                    if cached and any(cached.iterdir()):
                         model_path = str(cached)
 
                 self._tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -83,13 +85,15 @@ class LLMReranker:
                 model_path = model_name
 
                 if self.local_expansion_path and self.local_expansion_path.exists():
-                    model_path = str(self.local_expansion_path)
+                    # Check if directory is not empty
+                    if any(self.local_expansion_path.iterdir()):
+                        model_path = str(self.local_expansion_path)
                 else:
                     # Try downloader cache
                     if self._downloader is None:
                         self._downloader = ModelDownloader()
                     cached = self._downloader.get_model_path("expansion")
-                    if cached:
+                    if cached and any(cached.iterdir()):
                         model_path = str(cached)
 
                 self._expansion_tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -106,6 +110,8 @@ class LLMReranker:
             return [query]
 
         try:
+            import torch
+
             prompt = f"""Given the following search query, generate 2 alternative search queries that capture the same intent but use different wording or synonyms. Return only the variants, one per line.
 
 Query: {query}
@@ -115,7 +121,7 @@ Query: {query}
             # Move inputs to device
             inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
-            with self._expansion_model._torch.no_grad():
+            with torch.no_grad():
                 outputs = self._expansion_model.generate(
                     **inputs,
                     max_new_tokens=50,
