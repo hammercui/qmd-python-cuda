@@ -66,23 +66,33 @@ docs/
 
 ## 🔌 API 文档 (api/)
 
-### [MCP 接口规范](api/MCP_INTERFACE_SPEC.md)
+详见 [api/README.md](api/README.md) - API 文档索引
+
+### 核心文档
+
+#### [MCP Tools 规范](api/mcp-tools.md)
 **版本**: 1.0.0 | **协议**: MCP 2025-06-18
 
-完整的 MCP Server 接口规范：
 - **6 个 Tools**: search, vsearch, query, get, multi_get, status
 - **1 个 Resource**: qmd://{+path}
 - **1 个 Prompt**: query 使用指南
-- HTTP Transport 端点规范
 
-### [MCP 兼容性分析](api/MCP_COMPATIBILITY_ANALYSIS.md)
+#### [HTTP 端点规范](api/http-endpoints.md)
+**版本**: 1.0.0 | **协议**: HTTP/1.1
+
+- 5 个核心端点：embed, vsearch, query, search, health
+- REST API 接口
+- 默认端口：18765
+
+#### [兼容性分析](api/compatibility.md)
 **用途**: 与原版 QMD (TypeScript) 的兼容性分析
 
-包含：
-- 原始 QMD MCP Server 分析
-- 接口规范对比
-- 兼容性检查清单
-- 实现注意事项
+#### [实现指南](api/implementation-guide.md)
+**用途**: Server 实现者参考
+
+- 辅助函数定义
+- 数据结构说明
+- 测试用例
 
 ---
 

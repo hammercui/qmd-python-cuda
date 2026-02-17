@@ -626,8 +626,13 @@ python -m qmd.models.downloader
 - [自动服务发现](docs/architecture/AUTO_SERVER_DISCOVERY.md) - 零配置服务发现机制
 
 ### 🔌 API 文档
-- [MCP 接口规范](docs/api/MCP_INTERFACE_SPEC.md) - 6 Tools + 1 Resource + 1 Prompt
-- [MCP 兼容性分析](docs/api/MCP_COMPATIBILITY_ANALYSIS.md) - 与原版 QMD 的兼容性
+详见 [docs/api/README.md](docs/api/README.md) - API 文档中心
+
+**核心文档**：
+- [MCP Tools 规范](docs/api/mcp-tools.md) - 6 Tools + 1 Resource + 1 Prompt
+- [HTTP 端点规范](docs/api/http-endpoints.md) - REST API 接口
+- [兼容性分析](docs/api/compatibility.md) - 与原版 QMD 的兼容性
+- [实现指南](docs/api/implementation-guide.md) - 实现细节和测试用例
 
 ### 📖 使用指南
 - [最终配置文档](docs/guide/FINAL_CONFIG.md) - 模型配置和使用方法
