@@ -50,8 +50,25 @@ def create_app() -> FastAPI:
 
             # Initialize embed model
             from fastembed import TextEmbedding
+
+            # Detect GPU providers
+            providers = None
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    # Use CUDA for faster inference
+                    providers = ["CUDAExecutionProvider"]
+                    logger.info("Using CUDAExecutionProvider for fastembed")
+            except ImportError:
+                pass
+
             logger.info(f"Loading model: {DEFAULT_MODEL}")
-            _model = TextEmbedding(model_name=DEFAULT_MODEL)
+            logger.info(f"Providers: {providers or 'CPU'}")
+
+            _model = TextEmbedding(
+                model_name=DEFAULT_MODEL,
+                providers=providers
+            )
             _processing_lock = asyncio.Lock()
             logger.info("Model loaded successfully")
 
