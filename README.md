@@ -29,7 +29,7 @@
 ```
 嵌入模型: bge-small-en-v1.5 (130MB) - 384维向量
 重排模型: ms-marco-MiniLM-L-6-v2 (110MB) - 任务专用
-查询扩展: Qwen3-0.5B-Instruct (1.0GB) - 本地运行
+查询扩展: Qwen2.5-0.5B-Instruct (1.0GB) - 本地运行
 推理框架: PyTorch (CPU/CUDA) - 自动检测并使用GPU加速
 ```
 
@@ -617,30 +617,32 @@ python -m qmd.models.downloader
 
 ## 📚 文档
 
+### 📖 文档中心
+- [文档索引](docs/README.md) - 完整文档目录导航
+
 ### 🏗️ 架构文档
-- [统一服务器架构](docs/UNIFIED_SERVER_ARCHITECTURE.md) - 单一进程 + 多 Transport
-- [架构决策记录](docs/ARCHITECTURE_DECISION_2026-02-15.md) - Client-Server 分离决策
-- [MCP 接口规范](docs/MCP_INTERFACE_SPEC.md) - 6 Tools + 1 Resource + 1 Prompt
-- [自动服务发现](docs/AUTO_SERVER_DISCOVERY.md) - 零配置服务发现机制
+- [统一服务器架构](docs/architecture/UNIFIED_SERVER_ARCHITECTURE.md) - 单一进程 + 多 Transport
+- [架构决策记录](docs/architecture/ARCHITECTURE_DECISION_2026-02-15.md) - Client-Server 分离决策
+- [自动服务发现](docs/architecture/AUTO_SERVER_DISCOVERY.md) - 零配置服务发现机制
 
-### 📋 集成指南
-- [OpenClaw兼容性报告](OPENCLAW_COMPATIBILITY.md) - 100%兼容，可直接使用
-- [CLI模式分析](CLI_MODE_ANALYSIS.md) - 并行 vs Client-Server
-- [快速参考](QUICK_REFERENCE.md) - 一页纸指南
+### 🔌 API 文档
+- [MCP 接口规范](docs/api/MCP_INTERFACE_SPEC.md) - 6 Tools + 1 Resource + 1 Prompt
+- [MCP 兼容性分析](docs/api/MCP_COMPATIBILITY_ANALYSIS.md) - 与原版 QMD 的兼容性
 
-### 📈 项目报告
-- [项目完成报告](PROJECT_COMPLETION_REPORT.md) - 100%完成，生产就绪
-- [自动修复报告](AUTO_FIX_REPORT.md) - 所有问题已修复
-- [性能基准测试](PERFORMANCE_BENCHMARK_REPORT.md) - 性能数据
+### 📖 使用指南
+- [最终配置文档](docs/guide/FINAL_CONFIG.md) - 模型配置和使用方法
 
-### 🗂️ 历史文档（已归档）
-详细技术分析已移至 `docs/_to_delete/` 目录：
-- 技术栈对比（GGUF vs PyTorch）
-- 兼容性分析
-- 模型清单
-- 审计报告
+### 🔬 技术分析
+- [Search vs VSearch](docs/analysis/SEARCH_VSEARCH_COMPARISON.md) - 两种搜索方式对比
 
-详见：[文档清理报告](docs/DOC_CLEANUP_REPORT.md)
+### 📋 需求文档
+详见 [docs/requirement/](docs/requirement/) 目录：
+- 根因分析
+- 设计文档
+- 需求规格
+- 测试计划
+- 指标定义
+- 模型配置
 
 ---
 
