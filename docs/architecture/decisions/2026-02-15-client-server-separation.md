@@ -1,14 +1,12 @@
-# QMD-Python 核心架构决策记录
+# Client-Server 分离决策记录
 
-**日期**: 2026-02-15 13:20-13:30
+**日期**: 2026-02-15
 **决策人**: Boss + Zandar (CTO+COO)
-**项目路径**: `D:\MoneyProjects\qmd-python`
+**状态**: ✅ 已确认
 
 ---
 
-## 🎯 决策概述
-
-### 问题本质
+## 问题本质
 
 ```
 3个模型实例 × 4GB显存/个 = 12GB显存爆炸
@@ -22,7 +20,7 @@
 
 ---
 
-## ✅ 核心决策
+## 核心决策
 
 ### 决策1：Client-Server分离（必须）
 
@@ -31,7 +29,7 @@
 ┌─────────────────────────────────┐
 │         CLI / Client           │
 └────────────┬────────────────────┘
-             │ HTTP
+              │ HTTP
 ┌────────────▼────────────────────┐
 │   QMD Server (单一进程）        │
 │   - 单例模型（4GB VRAM）        │
@@ -114,7 +112,7 @@ async def embed(texts):
 
 ---
 
-## 📊 架构对比
+## 架构对比
 
 ### 旧方案（已废弃）
 
@@ -151,112 +149,7 @@ Server层（单一进程）：
 
 ---
 
-## 🔧 技术实现
-
-### HTTP端点（精简为4个）
-
-```python
-# qmd/server/app.py
-
-@app.post("/embed")
-async def embed(request: EmbedRequest):
-    """生成嵌入向量"""
-    async with _processing_lock:
-        return await model.encode(request.texts)
-
-@app.post("/vsearch")
-async def vsearch(request: VSearchRequest):
-    """向量搜索"""
-    async with _processing_lock:
-        query_emb = await model.encode([request.query])
-        return await vector_search(query_emb)
-
-@app.post("/query")
-async def query(request: QueryRequest):
-    """混合搜索"""
-    async with _processing_lock:
-        expanded = await llm.expand_query(request.query)
-        embeddings = await model.encode(expanded)
-        results = await vector_search(embeddings)
-        reranked = await reranker.rerank(request.query, results)
-        return reranked
-
-@app.get("/health")
-async def health():
-    """健康检查"""
-    return {
-        "status": "healthy" if model else "unhealthy",
-        "model_loaded": model is not None,
-        "queue_size": queue.qsize()
-    }
-```
-
-### CLI智能路由
-
-```python
-# qmd/cli.py
-
-# 不需要模型的命令：直接执行
-@cli.command()
-@click.argument("query")
-def search(query):
-    """BM25搜索（直接CLI，零等待）"""
-    searcher = FTSSearcher(db)
-    results = searcher.search(query)
-    display(results)
-
-# 需要模型的命令：HTTP Client
-@cli.command()
-@click.argument("query")
-def vsearch(query):
-    """向量搜索（需要模型，走Server）"""
-    client = QmdHttpClient()  # 自动检测/启动Server
-    results = client.vsearch(query)
-    display(results)
-```
-
-### 自动服务发现
-
-```python
-# qmd/server/client.py
-
-class QmdHttpClient:
-    def __init__(self, base_url: str | None = None):
-        self.base_url = base_url or self._discover_server()
-
-    def _discover_server(self) -> str:
-        """自动发现或启动Server"""
-        # 1. 尝试连接localhost:18765
-        # 2. 读取 ~/.qmd/server_port.txt
-        # 3. 检查进程是否存在
-        # 4. 不存在则自动启动
-        ...
-```
-
----
-
-## ⏱️ 时间估算
-
-### 任务精简（基于架构理解）
-
-| Phase | 任务 | 原估算 | 新估算 | 节省 |
-|-------|------|--------|--------|------|
-| 0 | 自动服务发现 | 1.5h | 1.5h | - |
-| 1 | HTTP端点（精简） | 2h | **1h** | 1h ⬇️ |
-| 2 | HTTP客户端 | 1h | 1h | - |
-| 3 | CLI智能路由 | 1.5h | **1h** | 0.5h ⬇️ |
-| **总计** | - | **6h** | **4.5h** | **1.5h** ⬇️ |
-
-**节省原因**：
-- 端点精简：8个 → 4个（embed, vsearch, query, health）
-- CLI简化：复杂的mode选项 → 智能路由
-- 架构清晰：职责分离（代码更简单）
-
-**时间节省：25%**
-
----
-
-## 🎯 核心价值总结
+## 核心价值总结
 
 ### 技术价值
 - ✅ 显存节省：66%（4GB vs 12GB）
@@ -277,7 +170,7 @@ class QmdHttpClient:
 
 ---
 
-## 📝 关键约束
+## 关键约束
 
 ### 必须满足
 1. ✅ Client-Server分离（架构要求）
@@ -297,43 +190,15 @@ class QmdHttpClient:
 
 ---
 
-## 🚀 下一步行动
+## 下一步行动
 
-### Phase 0: 自动服务发现（1.5h）
-- [ ] 端口管理器（qmd/server/port_manager.py）
-- [ ] 进程检测器（qmd/server/process.py）
-- [ ] 智能客户端（qmd/server/client.py）
-
-### Phase 1: HTTP Server（1h）
-- [ ] 数据模型（qmd/server/models.py）
-- [ ] 4个端点（qmd/server/app.py）
-
-### Phase 2: HTTP Client（1h）
-- [ ] QmdHttpClient类（qmd/server/client.py）
-- [ ] 自动服务发现集成
-
-### Phase 3: CLI智能路由（1h）
-- [ ] 路由逻辑（qmd/cli.py）
-- [ ] server命令更新
-
-**总计时间：4.5小时**
+详细实现计划请参见：
+- [架构总览](../core/overview.md)
+- [自动服务发现](../auto-discovery/overview.md)
+- [Transport设计](../core/transport-design.md)
 
 ---
 
-## ✅ 决策确认
-
-**决策人确认**：
-- ✅ Boss：2026-02-15 13:20 确认架构理解
-- ✅ Zandar：2026-02-15 13:30 记录决策
-
-**项目状态**：
-- ✅ 架构理解100%正确
-- ✅ 实施路径清晰
-- ✅ 时间估算准确（4.5小时）
-
-**下一步**：开始实施Phase 0（自动服务发现）
-
----
-
-**文档版本**: 1.0
-**最后更新**: 2026-02-15 13:30
+**文档版本**: 2.0
+**最后更新**: 2026-02-18
+**原始文档**: ARCHITECTURE_DECISION_2026-02-15.md

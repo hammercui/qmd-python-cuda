@@ -1,6 +1,6 @@
 # QMD-Python 文档中心
 
-> **最后更新**: 2026-02-17
+> **最后更新**: 2026-02-18
 > **项目路径**: D:\MoneyProjects\qmd-python
 
 ---
@@ -11,14 +11,18 @@
 docs/
 ├── README.md                   # 本文档 - 文档索引
 ├── architecture/               # 架构设计文档
-│   ├── ARCHITECTURE_DECISION_2026-02-15.md
-│   ├── UNIFIED_SERVER_ARCHITECTURE.md
-│   └── AUTO_SERVER_DISCOVERY.md
+│   ├── README.md               # 架构文档索引
+│   ├── decisions/              # 决策记录
+│   ├── core/                   # 核心架构
+│   └── auto-discovery/         # 自动服务发现
 ├── api/                        # API 接口规范
-│   ├── MCP_INTERFACE_SPEC.md
-│   └── MCP_COMPATIBILITY_ANALYSIS.md
+│   ├── README.md               # API文档索引
+│   ├── mcp-tools.md            # MCP Tools规范
+│   ├── http-endpoints.md       # HTTP端点规范
+│   ├── compatibility.md        # 兼容性分析
+│   └── implementation-guide.md # 实现指南
 ├── guide/                      # 使用指南
-│   └── FINAL_CONFIG.md
+│   └── FINAL_CONFIG.md         # 模型配置和使用
 ├── analysis/                   # 技术分析
 │   └── SEARCH_VSEARCH_COMPARISON.md
 ├── requirement/                # 需求文档
@@ -35,32 +39,54 @@ docs/
 
 ## 🏗️ 架构文档 (architecture/)
 
-### [架构决策记录](architecture/ARCHITECTURE_DECISION_2026-02-15.md)
-**日期**: 2026-02-15 | **状态**: 已确认
+详见 [architecture/README.md](architecture/README.md) - 架构文档索引
 
-核心架构决策，包括：
-- Client-Server 分离设计
-- HTTP MCP Server 方案
+### 核心文档
+
+#### [架构总览](architecture/core/overview.md)
+**版本**: 1.0.0 | **状态**: 设计完成
+
+完整架构概述，包括：
+- Client-Server分离架构
+- CLI智能路由
+- Server核心组件
+- 工作流程和性能指标
+
+#### [Client-Server分离决策](architecture/decisions/2026-02-15-client-server-separation.md)
+**日期**: 2026-02-15 | **状态**: ✅ 已确认
+
+核心架构决策记录：
+- Client-Server分离设计
+- HTTP MCP Server方案
 - 操作分类与智能路由
 - 队列串行机制
 
-### [统一服务器架构](architecture/UNIFIED_SERVER_ARCHITECTURE.md)
+#### [Transport层设计](architecture/core/transport-design.md)
 **版本**: 1.0.0 | **状态**: 设计完成
 
-单一 Server 进程 + 多 Transport 架构：
-- 核心：单例模型（4GB VRAM）
-- HTTP Transport（端口 18765）
-- MCP Transport（stdio）
-- 自动服务发现机制
+多种Transport设计：
+- QmdServer核心类
+- HTTP Transport（CLI命令）
+- MCP Transport（AI Agent）
+- 文件结构和使用示例
 
-### [自动服务发现](architecture/AUTO_SERVER_DISCOVERY.md)
+#### [自动服务发现](architecture/auto-discovery/overview.md)
 **优先级**: P0 | **状态**: 设计完成
 
 零配置服务发现机制：
-- 端口自动检测和递增（18765→18766→...）
-- 端口信息持久化（`~/.qmd/server_port.txt`）
+- 端口自动检测和递增
 - 进程检测避免重复启动
-- 自动启动 Server
+- 自动启动Server
+- 使用场景和测试计划
+
+#### [实现细节](architecture/auto-discovery/implementation.md)
+**状态**: 设计完成，待实现
+
+代码实现详情：
+- 端口管理器（port_manager.py）
+- 进程检测器（process.py）
+- 智能客户端（client.py）
+- CLI集成和依赖管理
 
 ---
 
@@ -141,16 +167,17 @@ docs/
 ### 快速了解项目
 1. [README.md](../README.md) - 项目概述
 2. [最终配置文档](guide/FINAL_CONFIG.md) - 模型配置和使用
-3. [统一服务器架构](architecture/UNIFIED_SERVER_ARCHITECTURE.md) - 系统架构
+3. [架构总览](architecture/core/overview.md) - 系统架构
 
 ### 深入技术细节
-4. [架构决策记录](architecture/ARCHITECTURE_DECISION_2026-02-15.md) - 核心决策
-5. [MCP 接口规范](api/MCP_INTERFACE_SPEC.md) - API 规范
-6. [自动服务发现](architecture/AUTO_SERVER_DISCOVERY.md) - 服务发现机制
+4. [Client-Server分离决策](architecture/decisions/2026-02-15-client-server-separation.md) - 核心决策
+5. [Transport层设计](architecture/core/transport-design.md) - HTTP + MCP Transport
+6. [自动服务发现](architecture/auto-discovery/overview.md) - 零配置机制
+7. [MCP Tools规范](api/mcp-tools.md) - API规范
 
 ### 了解问题背景
-7. [根因分析](requirement/01-root-cause-analysis.md) - 问题背景
-8. [Search vs VSearch](analysis/SEARCH_VSEARCH_COMPARISON.md) - 搜索技术对比
+8. [根因分析](requirement/01-root-cause-analysis.md) - 问题背景
+9. [Search vs VSearch](analysis/SEARCH_VSEARCH_COMPARISON.md) - 搜索技术对比
 
 ---
 
