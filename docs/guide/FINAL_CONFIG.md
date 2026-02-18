@@ -1,7 +1,7 @@
 # QMD-Python 最终配置文档
 
-**配置日期**: 2026-02-17
-**版本**: v1.0 (PyTorch + fastembed 混合方案)
+**配置日期**: 2026-02-18
+**版本**: v1.1 (PyTorch + fastembed 混合方案，升级至Qwen3-Reranker)
 
 ---
 
@@ -12,9 +12,9 @@
 | 功能 | 引擎 | 模型 | 格式 | 显存 | 状态 |
 |------|------|------|------|------|------|
 | **Embedding** | fastembed-gpu (ONNX) | bge-small-en-v1.5 | ONNX | ~900MB | ✅ 优秀 |
-| **Reranker** | PyTorch (CUDA) | ms-marco-MiniLM-L-6-v2 | safetensors | ~100MB | ✅ 正常 |
+| **Reranker** | PyTorch (CUDA) | Qwen/Qwen3-Reranker-0.6B | safetensors | ~1.2GB | ✅ 优秀 |
 | **Query Expansion** | PyTorch (CUDA) | Qwen/Qwen2.5-0.5B-Instruct | safetensors | ~2GB | ✅ 正常 |
-| **总计** | | | | **~3GB** | |
+| **总计** | | | | **~4.1GB** | |
 
 ---
 

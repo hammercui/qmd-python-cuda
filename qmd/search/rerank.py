@@ -9,9 +9,10 @@ def _get_device() -> str:
     """Auto-detect best available device (cuda > mps > cpu)."""
     try:
         import torch
+
         if torch.cuda.is_available():
             return "cuda"
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps"  # Apple Silicon
         else:
             return "cpu"
@@ -24,9 +25,13 @@ class LLMReranker:
     Reranker using local models (transformers).
     Query Expansion + Cross-Encoder for Reranking.
     """
-    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
-                 local_reranker_path: Optional[Path] = None,
-                 local_expansion_path: Optional[Path] = None):
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-Reranker-0.6B",
+        local_reranker_path: Optional[Path] = None,
+        local_expansion_path: Optional[Path] = None,
+    ):
         """
         Args:
             model_name: HuggingFace model ID or local path
@@ -42,12 +47,15 @@ class LLMReranker:
         self._expansion_tokenizer = None
         self._device = _get_device()
         self._downloader: Optional[ModelDownloader] = None
- 
+
     @property
     def model(self):
         if self._model is None:
             try:
-                from transformers import AutoTokenizer, AutoModelForSequenceClassification
+                from transformers import (
+                    AutoTokenizer,
+                    AutoModelForSequenceClassification,
+                )
                 import torch
 
                 # Determine model path (local > download)
@@ -65,12 +73,16 @@ class LLMReranker:
                         model_path = str(cached)
 
                 self._tokenizer = AutoTokenizer.from_pretrained(model_path)
-                self._model = AutoModelForSequenceClassification.from_pretrained(model_path)
+                self._model = AutoModelForSequenceClassification.from_pretrained(
+                    model_path
+                )
                 self._model.to(self._device)  # Move to detected device
                 self._model.eval()
                 self._torch = torch
             except ImportError:
-                print("Warning: transformers or torch not installed. Reranking will be disabled.")
+                print(
+                    "Warning: transformers or torch not installed. Reranking will be disabled."
+                )
         return self._model
 
     @property
@@ -101,9 +113,11 @@ class LLMReranker:
                 self._expansion_model.to(self._device)  # Move to detected device
                 self._expansion_model.eval()
             except ImportError:
-                print("Warning: transformers or torch not installed. Query expansion will be disabled.")
+                print(
+                    "Warning: transformers or torch not installed. Query expansion will be disabled."
+                )
         return self._expansion_model
- 
+
     def expand_query(self, query: str) -> List[str]:
         """Expand query into 2-3 variants using local Qwen3."""
         if not self.expansion_model:
@@ -127,10 +141,12 @@ Query: {query}
                     max_new_tokens=50,
                     temperature=0.7,
                     do_sample=True,
-                    pad_token_id=self._expansion_tokenizer.eos_token_id
+                    pad_token_id=self._expansion_tokenizer.eos_token_id,
                 )
 
-            response = self._expansion_tokenizer.decode(outputs[0], skip_special_tokens=True)
+            response = self._expansion_tokenizer.decode(
+                outputs[0], skip_special_tokens=True
+            )
 
             # Parse variants (after "Query:" line)
             if "Query:" in response:
@@ -141,19 +157,21 @@ Query: {query}
         except Exception as e:
             print(f"Query expansion error: {e}")
             return [query]
- 
-    def rerank(self, query: str, documents: List[Dict[str, Any]], top_k: int = 10) -> List[Dict[str, Any]]:
+
+    def rerank(
+        self, query: str, documents: List[Dict[str, Any]], top_k: int = 10
+    ) -> List[Dict[str, Any]]:
         """Rerank documents using cross-encoder."""
         if not documents:
             return []
-             
+
         if not self.model:
             return documents[:top_k]
-             
+
         # Prepare pairs for cross-encoder
         # Use content if available, otherwise title
         pairs = [[query, doc.get("content", doc.get("title", ""))] for doc in documents]
-         
+
         try:
             with self._torch.no_grad():
                 inputs = self._tokenizer(
@@ -161,23 +179,25 @@ Query: {query}
                     padding=True,
                     truncation=True,
                     return_tensors="pt",
-                    max_length=512
+                    max_length=512,
                 )
                 # Move inputs to same device as model
                 inputs = {k: v.to(self._device) for k, v in inputs.items()}
                 outputs = self._model(**inputs)
                 scores = outputs.logits.squeeze(-1)
-                 
+
                 # If scores is 1D (for multiple documents) or 0D (for single)
                 if scores.dim() == 0:
                     scores = scores.unsqueeze(0)
-                 
+
             # Add scores to documents
             for i, doc in enumerate(documents):
                 doc["rerank_score"] = float(scores[i])
-                 
+
             # Sort by rerank_score
-            reranked = sorted(documents, key=lambda x: x.get("rerank_score", 0), reverse=True)
+            reranked = sorted(
+                documents, key=lambda x: x.get("rerank_score", 0), reverse=True
+            )
             return reranked[:top_k]
         except Exception as e:
             print(f"Reranking error: {e}")

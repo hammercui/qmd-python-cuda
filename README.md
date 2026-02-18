@@ -28,7 +28,7 @@
 
 ```
 嵌入模型: bge-small-en-v1.5 (130MB) - 384维向量
-重排模型: ms-marco-MiniLM-L-6-v2 (110MB) - 任务专用
+重排模型: Qwen3-Reranker-0.6B (1.2GB) - MTEB-R: 65.80
 查询扩展: Qwen2.5-0.5B-Instruct (1.0GB) - 本地运行
 推理框架: PyTorch (CPU/CUDA) - 自动检测并使用GPU加速
 ```
@@ -92,7 +92,7 @@ pip install -e .[cuda]
 - Python 3.9+
 - Windows/Linux/macOS
 - **GPU加速**: CUDA 12.1+（可选，CPU版本无需）
-- **磁盘空间**: 约1.24GB（模型）
+- **磁盘空间**: 约2.34GB（模型）
 
 ## 快速开始
 
@@ -127,9 +127,9 @@ qmd check --download
 | 模型 | 大小 | 用途 |
 |------|------|------|
 | bge-small-en-v1.5 | 130MB | 向量嵌入 |
-| ms-marco-MiniLM-L-6-v2 | 110MB | 重排序 |
+| Qwen3-Reranker-0.6B | 1.2GB | 重排序 |
 | Qwen2.5-0.5B-Instruct | 1.0GB | 查询扩展 |
-| **总计** | **1.24GB** | - |
+| **总计** | **2.34GB** | - |
 
 **双源下载**: 同时从HuggingFace和ModelScope并行下载，自动使用最快的源。
 
@@ -458,7 +458,7 @@ source .venv/bin/activate
 
 ### 4. 模型下载
 
-**首次使用**: 需要下载1.24GB模型文件
+**首次使用**: 需要下载2.34GB模型文件
 
 **下载方式**:
 - **自动**: 运行 `qmd check` 或 `qmd embed` 时自动下载

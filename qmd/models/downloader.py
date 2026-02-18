@@ -17,6 +17,7 @@ import shutil
 try:
     from rich.console import Console
     from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
@@ -38,21 +39,23 @@ def _detect_location() -> str:
         import datetime
 
         # Get timezone
-        if hasattr(time, 'tz'):
+        if hasattr(time, "tz"):
             tz = time.tzname
-            if tz and 'Asia/Shanghai' in tz:
-                return 'cn'
-            if tz and ('Asia/Beijing' in tz or 'Asia/Chongqing' in tz or 'Asia/Harbin' in tz):
-                return 'cn'
+            if tz and "Asia/Shanghai" in tz:
+                return "cn"
+            if tz and (
+                "Asia/Beijing" in tz or "Asia/Chongqing" in tz or "Asia/Harbin" in tz
+            ):
+                return "cn"
 
         # Fallback: Check via IP (slower)
         try:
-            response = requests.get('http://ip-api.com/json/', timeout=3)
+            response = requests.get("http://ip-api.com/json/", timeout=3)
             if response.status_code == 200:
                 data = response.json()
-                country = data.get('country_code', '').upper()
-                if country == 'CN':
-                    return 'cn'
+                country = data.get("country_code", "").upper()
+                if country == "CN":
+                    return "cn"
         except:
             pass
 
@@ -60,7 +63,7 @@ def _detect_location() -> str:
         pass
 
     # Default: Assume China for faster downloads for Chinese users
-    return 'cn'
+    return "cn"
 
 
 class ModelDownloader:
@@ -73,25 +76,27 @@ class ModelDownloader:
             "ms": "XorPLM/bge-small-en-v1.5",
             "size_mb": 130,
             "type": "sentence-transformers",
-            "gguf": "hf:ggml-org/embeddinggemma-300M-Q8_0-GGUF"
+            "gguf": "hf:ggml-org/embeddinggemma-300M-Q8_0-GGUF",
         },
         "reranker": {
-            "hf": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-            "ms": "AI4Fun/ms-marco-MiniLM-L-6-v2",
-            "size_mb": 110,
+            "hf": "Qwen/Qwen3-Reranker-0.6B",
+            "ms": "Qwen/Qwen3-Reranker-0.6B",
+            "size_mb": 1200,
             "type": "cross-encoder",
-            "gguf": "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf"
+            "gguf": "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf",
         },
         "expansion": {
             "hf": "Qwen/Qwen2.5-0.5B-Instruct",
             "ms": "Qwen/Qwen2.5-0.5B-Instruct",
             "size_mb": 1000,
             "type": "llm",
-            "gguf": "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf"
-        }
+            "gguf": "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf",
+        },
     }
 
-    def __init__(self, cache_dir: Optional[Path] = None, model_source: Optional[str] = None):
+    def __init__(
+        self, cache_dir: Optional[Path] = None, model_source: Optional[str] = None
+    ):
         """
         Args:
             cache_dir: Custom cache directory (default: ~/.cache/qmd/models/)
@@ -117,19 +122,21 @@ class ModelDownloader:
 
         self.model_source = model_source
 
-    def _download_from_hf(self, model_name: str, local_path: Path, progress=None, task=None) -> bool:
+    def _download_from_hf(
+        self, model_name: str, local_path: Path, progress=None, task=None
+    ) -> bool:
         """Download from HuggingFace."""
         try:
             from huggingface_hub import snapshot_download
 
             if self.console and progress and task:
-                progress.update(task, description=f"[cyan][HF] Downloading {model_name}...")
+                progress.update(
+                    task, description=f"[cyan][HF] Downloading {model_name}..."
+                )
 
             # Download model files
             snapshot_download(
-                repo_id=model_name,
-                local_dir=local_path,
-                local_dir_use_symlinks=False
+                repo_id=model_name, local_dir=local_path, local_dir_use_symlinks=False
             )
 
             if self.console and progress and task:
@@ -141,20 +148,21 @@ class ModelDownloader:
                 self.console.print(f"[red][HF] X Failed: {e}[/red]")
             return False
 
-    def _download_from_ms(self, model_name: str, local_path: Path, progress=None, task=None) -> bool:
+    def _download_from_ms(
+        self, model_name: str, local_path: Path, progress=None, task=None
+    ) -> bool:
         """Download from ModelScope."""
         try:
             from modelscope.hub.api import HubApi
 
             if self.console and progress and task:
-                progress.update(task, description=f"[cyan][MoT] Downloading {model_name}...")
+                progress.update(
+                    task, description=f"[cyan][MoT] Downloading {model_name}..."
+                )
 
             api = HubApi()
             # Download model to local path
-            api.snapshot_download(
-                model_name,
-                cache_dir=str(local_path.parent)
-            )
+            api.snapshot_download(model_name, cache_dir=str(local_path.parent))
 
             # Move to exact path if needed
             downloaded_path = local_path.parent / model_name.replace("/", "--")
@@ -163,7 +171,9 @@ class ModelDownloader:
 
             if self.console and progress and task:
                 progress.update(task, completed=100)
-                self.console.print(f"[green][MoT] OK Downloaded to {local_path}[/green]")
+                self.console.print(
+                    f"[green][MoT] OK Downloaded to {local_path}[/green]"
+                )
             return True
         except Exception as e:
             if self.console and progress and task:
@@ -182,15 +192,19 @@ class ModelDownloader:
         # Auto-detect location
         location = _detect_location()
 
-        if location == 'cn':
+        if location == "cn":
             # China: Use ModelScope
             if self.console:
-                self.console.print(f"[dim]Detected location: China - Using ModelScope[/dim]")
+                self.console.print(
+                    f"[dim]Detected location: China - Using ModelScope[/dim]"
+                )
             return model_info["ms"]
         else:
             # Overseas: Use HuggingFace
             if self.console:
-                self.console.print(f"[dim]Detected location: Overseas - Using HuggingFace[/dim]")
+                self.console.print(
+                    f"[dim]Detected location: Overseas - Using HuggingFace[/dim]"
+                )
             return model_info["hf"]
 
     def _parallel_download(self, model_key: str, force: bool = False) -> Optional[Path]:
@@ -205,22 +219,28 @@ class ModelDownloader:
         # Check if already exists
         if local_path.exists() and not force:
             if self.console:
-                self.console.print(f"[green]OK Model already cached: {local_path}[/green]")
+                self.console.print(
+                    f"[green]OK Model already cached: {local_path}[/green]"
+                )
             return local_path
 
         # Select source based on location
         source = self._select_source(model_key)
 
         if self.console:
-            source_name = "ModelScope" if "modelscope" in source.lower() else "HuggingFace"
+            source_name = (
+                "ModelScope" if "modelscope" in source.lower() else "HuggingFace"
+            )
             with Progress(
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
                 TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                 TimeRemainingColumn(),
-                console=self.console
+                console=self.console,
             ) as progress:
-                task = progress.add_task(f"[cyan][{source_name}] Downloading {model_key}...", total=100)
+                task = progress.add_task(
+                    f"[cyan][{source_name}] Downloading {model_key}...", total=100
+                )
 
                 # Try to download from selected source
                 if "modelscope" in source.lower():
@@ -240,7 +260,11 @@ class ModelDownloader:
                 if self._download_from_hf(source, local_path, None, None):
                     return local_path
 
-        self.console.print(f"[red]X Download failed for {model_key}[/red]" if self.console else f"Failed to download {model_key}")
+        self.console.print(
+            f"[red]X Download failed for {model_key}[/red]"
+            if self.console
+            else f"Failed to download {model_key}"
+        )
         return None
 
     def download_all(self, force: bool = False) -> Dict[str, Optional[Path]]:
@@ -268,7 +292,9 @@ class ModelDownloader:
         if self.console:
             self.console.print(f"[bold green]Download complete![/bold green]")
             successful = sum(1 for p in results.values() if p is not None)
-            self.console.print(f"[dim]Successfully downloaded: {successful}/3 models[/dim]")
+            self.console.print(
+                f"[dim]Successfully downloaded: {successful}/3 models[/dim]"
+            )
 
         return results
 
