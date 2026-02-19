@@ -1,0 +1,92 @@
+{
+  "system_info": {
+    "cpu_count": 12,
+    "memory_total_gb": 31.79534149169922,
+    "cuda_available": true,
+    "gpu_name": "NVIDIA GeForce GTX 1660 Ti",
+    "gpu_memory_gb": 5.99969482421875,
+    "threads_used": 11,
+    "gpu_layers": -1
+  },
+  "model_info": {
+    "path": "C:\\Users\\Administrator\\.qmd\\models\\bge-small-en-v1.5.Q8_0.gguf",
+    "filename": "bge-small-en-v1.5.Q8_0.gguf",
+    "size_mb": 35.101837158203125
+  },
+  "single_embeddings": {
+    "Short (1 sentence)": {
+      "mean_ms": 5.343969999739784,
+      "median_ms": 5.477200000314042,
+      "min_ms": 4.706699997768737,
+      "max_ms": 6.132200000138255,
+      "p95_ms": 6.132200000138255,
+      "p99_ms": 6.132200000138255,
+      "throughput_per_sec": 187.12679899937564,
+      "memory_used_mb": 0.03125,
+      "gpu_memory_used_mb": 0.0,
+      "gpu_memory_peak_mb": 0.0
+    },
+    "Medium (5 sentences)": {
+      "mean_ms": 7.38149000062549,
+      "median_ms": 7.363400000031106,
+      "min_ms": 6.945500001165783,
+      "max_ms": 8.079900002485374,
+      "p95_ms": 8.079900002485374,
+      "p99_ms": 8.079900002485374,
+      "throughput_per_sec": 135.4740032046731,
+      "memory_used_mb": -0.01171875,
+      "gpu_memory_used_mb": 0.0,
+      "gpu_memory_peak_mb": 0.0
+    },
+    "Long (paragraph)": {
+      "mean_ms": 14.317160000427975,
+      "median_ms": 14.44390000324347,
+      "min_ms": 13.809899999614572,
+      "max_ms": 14.565800000127638,
+      "p95_ms": 14.565800000127638,
+      "p99_ms": 14.565800000127638,
+      "throughput_per_sec": 69.84625442267235,
+      "memory_used_mb": -7.98828125,
+      "gpu_memory_used_mb": 0.0,
+      "gpu_memory_peak_mb": 0.0
+    }
+  },
+  "batch_embeddings": {
+    "batch_size_1": {
+      "total_texts": 5,
+      "batch_size": 1,
+      "mean_ms_per_text": 4.626039999857312,
+      "median_ms_per_text": 4.4043999987479765,
+      "min_ms_per_text": 4.319900002883514,
+      "max_ms_per_text": 5.282499998429557,
+      "throughput_texts_per_sec": 216.1676077229865
+    },
+    "batch_size_5": {
+      "total_texts": 25,
+      "batch_size": 5,
+      "mean_ms_per_text": 7.260607999924105,
+      "median_ms_per_text": 7.25112000000081,
+      "min_ms_per_text": 7.2263400004885625,
+      "max_ms_per_text": 7.3134999998728745,
+      "throughput_texts_per_sec": 137.72951246100232
+    },
+    "batch_size_10": {
+      "total_texts": 50,
+      "batch_size": 10,
+      "mean_ms_per_text": 8.30567400000291,
+      "median_ms_per_text": 8.140500000081374,
+      "min_ms_per_text": 8.05292000004556,
+      "max_ms_per_text": 8.732740000050399,
+      "throughput_texts_per_sec": 120.39962078931218
+    },
+    "batch_size_20": {
+      "total_texts": 100,
+      "batch_size": 20,
+      "mean_ms_per_text": 8.27307200001087,
+      "median_ms_per_text": 8.212180000009539,
+      "min_ms_per_text": 8.182194999972126,
+      "max_ms_per_text": 8.416005000071891,
+      "throughput_texts_per_sec": 120.8740840160325
+    }
+  }
+}

@@ -1,0 +1,110 @@
+=============================================================================
+QMD-Python: Llama-cpp-python Integration Archive Summary
+=============================================================================
+
+Date: 2026-02-19
+Status: COMPLETED (Archived)
+
+=============================================================================
+WHAT WAS DONE
+=============================================================================
+
+All llama-cpp-python related files have been moved to:
+  docs/deprecated/llama-cpp-python/
+
+Archive Contents:
+  - 12 files total
+  - 102 MB (mostly wheel files)
+  - Complete test/benchmark scripts
+  - Performance reports and documentation
+
+=============================================================================
+FILE STRUCTURE
+=============================================================================
+
+docs/deprecated/llama-cpp-python/
+├── README.md                           # Main analysis (8 KB)
+├── scripts/                            # Test scripts (72 KB)
+│   ├── test_llama_embedding.py         # Embedding benchmark
+│   ├── test_llama_reranker.py          # Reranker benchmark  
+│   ├── test_model_loading.py           # Model loading tests
+│   ├── test_qwen_reranker_loading.py   # Qwen3 compatibility test
+│   ├── test_bge_model.py               # BGE model test
+│   ├── demo_llama_embedding.py         # Usage demo
+│   ├── download_gguf_model.py          # Model downloader
+│   └── download_gguf_simple.py         # Simplified downloader
+├── wheels/                             # Pre-built packages (102 MB)
+│   ├── llama_cpp_python-0.3.16-cp310-cp310-win_amd64.whl
+│   └── llama_cpp_python-0.3.4-cp310-cp310-win_amd64.whl
+└── reports/                            # Performance data (12 KB)
+    ├── LLAMA_CPP_PERFORMANCE_REPORT.md # Detailed analysis
+    └── embedding_benchmark_results.json # Raw benchmark data
+
+=============================================================================
+KEY FINDINGS
+=============================================================================
+
+✅ What Worked:
+   - BGE Small English v1.5 (Q8_0) embedding model
+   - GPU acceleration on GTX 1660 Ti
+   - 5-15ms latency (excellent performance)
+   - 35 MB model size (3.5x smaller than PyTorch)
+   - 22 MB GPU memory (20x less than PyTorch)
+
+❌ What Didn't:
+   - Qwen3-Reranker-0.6B (model compatibility)
+   - Gemma-embedding models (architecture not supported)
+   - Any modern SOTA embedding/reranker models
+   - No upgrade path (llama-cpp-python 0.3.16 is latest)
+
+=============================================================================
+DECISION
+=============================================================================
+
+Abandoned llama-cpp-python approach due to:
+  1. Model compatibility issues (critical blocker)
+  2. No viable upgrade path
+  3. Architectural mismatch with requirements
+
+Current Solution: PyTorch + fastembed
+  - Better model quality (FP16 vs Q8)
+  - Supports all modern architectures
+  - Active maintenance and ecosystem
+  - Acceptable performance (~15-20ms latency)
+
+================================================================<arg_value>LESSONS LEARNED
+=============================================================================
+
+1. Check model compatibility BEFORE implementation
+2. Not all "optimized" solutions are better
+3. Version constraints can be critical blockers
+4. PyTorch remains the best choice for embeddings
+
+=============================================================================
+NEXT STEPS
+=============================================================================
+
+✅ DONE:
+  - Archive all llama-cpp-python files
+  - Document reasons for abandonment
+  - Clean up project root directory
+  - Update deprecated index
+
+🔄 CONTINUE:
+  - Use PyTorch + fastembed for production
+  - Monitor llama-cpp-python for future improvements
+  - Focus on other optimization opportunities
+
+=============================================================================
+ARCHIVE INTEGRITY
+=============================================================================
+
+Root directory: CLEAN (no llama-cpp files)
+Archive location: docs/deprecated/llama-cpp-python/
+Total files: 12
+Total size: ~102 MB
+Documentation: Complete
+
+=============================================================================
+For questions, refer to: docs/deprecated/llama-cpp-python/README.md
+=============================================================================
