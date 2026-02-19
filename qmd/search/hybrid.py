@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from .fts import FTSSearcher
 from .vector import VectorSearch, SearchResult
 from ..database.manager import DatabaseManager
@@ -14,17 +14,25 @@ class HybridSearcher:
         vector_db_dir: Directory for ChromaDB persistence
         mode: Embedding mode - "auto", "standalone", or "server"
         server_url: MCP Server URL (used when mode="server")
+        embed_fn: Optional callable (text -> embedding) to inject into VectorSearch.
+                  When provided, mode/server_url are ignored for vector embedding.
     """
 
     def __init__(
         self,
         db: DatabaseManager,
-        vector_db_dir: str = ".qmd_vector_db",
+        vector_db_dir: Optional[str] = None,
         mode: str = "auto",
-        server_url: str = "http://localhost:8000",
+        server_url: str = "http://localhost:18765",
+        embed_fn: Optional[Callable[[str], List[float]]] = None,
     ):
         self.fts = FTSSearcher(db)
-        self.vector = VectorSearch(vector_db_dir, mode=mode, server_url=server_url)
+        self.vector = VectorSearch(
+            vector_db_dir,
+            mode=mode,
+            server_url=server_url,
+            embed_fn=embed_fn,
+        )
         self.db = db
 
     def search(
@@ -42,8 +50,9 @@ class HybridSearcher:
 
         # 2. Get Vector results
         # Vector score: higher is better. Results are already sorted.
+        # collection=None → VectorSearch.search() will search ALL collections
         vector_results = self.vector.search(
-            query, collection or "default", limit=limit * 2
+            query, collection_name=collection or None, limit=limit * 2
         )
 
         # 3. RRF Fusion

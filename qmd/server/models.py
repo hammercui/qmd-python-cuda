@@ -40,8 +40,31 @@ class QueryResponse(BaseModel):
     results: List[Dict[str, Any]]
 
 
+class ExpandRequest(BaseModel):
+    """Request model for query expansion."""
+    query: str
+
+
+class ExpandResponse(BaseModel):
+    """Response model for query expansion."""
+    queries: List[str]
+
+
+class RerankRequest(BaseModel):
+    """Request model for LLM reranking."""
+    query: str
+    documents: List[Dict[str, Any]]
+    top_k: int = 5
+
+
+class RerankResponse(BaseModel):
+    """Response model for LLM reranking."""
+    results: List[Dict[str, Any]]
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str
     model_loaded: bool
+    reranker_loaded: bool = False
     queue_size: int = 0

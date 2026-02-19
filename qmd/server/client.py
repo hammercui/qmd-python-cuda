@@ -28,15 +28,23 @@ class EmbedServerClient:
     - Fallback to None if unavailable
     """
 
-    def __init__(self, base_url: Optional[str] = None, timeout: float = 5.0):
+    def __init__(self, base_url: Optional[str] = None, timeout: float = 120.0):
         """
         Initialize client with automatic service discovery.
 
         Args:
             base_url: Base URL of the MCP server (None = auto-discover)
-            timeout: Request timeout in seconds
+            timeout: Read timeout in seconds for search/embed requests (default 120s).
+                     Connect timeout is always 5 s.
         """
         self.timeout = timeout
+        # Fine-grained timeout: quick connect probe, generous read for search/rerank
+        self._request_timeout = httpx.Timeout(
+            connect=5.0,
+            read=timeout,
+            write=30.0,
+            pool=5.0,
+        )
         self._client: Optional[httpx.Client] = None
         self.base_url = base_url or self._discover_server()
 
@@ -147,7 +155,7 @@ class EmbedServerClient:
     def _get_client(self) -> httpx.Client:
         """Lazy initialization of HTTP client."""
         if self._client is None:
-            self._client = httpx.Client(timeout=self.timeout)
+            self._client = httpx.Client(timeout=self._request_timeout)
         return self._client
 
     def health_check(self) -> bool:
@@ -194,7 +202,11 @@ class EmbedServerClient:
             return None
 
     def vsearch(
-        self, query: str, limit: int = 10, min_score: float = 0.3
+        self,
+        query: str,
+        limit: int = 10,
+        min_score: float = 0.3,
+        collection: Optional[str] = None,
     ) -> Optional[list]:
         """
         Vector semantic search.
@@ -203,50 +215,50 @@ class EmbedServerClient:
             query: Search query string
             limit: Max number of results
             min_score: Minimum similarity score (0-1)
+            collection: Collection name to filter (None = search all collections)
 
         Returns:
             List of search results if successful, None otherwise
         """
         try:
             client = self._get_client()
-            response = client.post(
-                f"{self.base_url}/vsearch",
-                json={"query": query, "limit": limit, "min_score": min_score},
-            )
+            body: dict = {"query": query, "limit": limit, "min_score": min_score}
+            if collection:
+                body["collection"] = collection
+            response = client.post(f"{self.base_url}/vsearch", json=body)
             response.raise_for_status()
-
-            data = response.json()
-            return data.get("results", [])
-
+            return response.json().get("results", [])
         except Exception as e:
             logger.error(f"Vector search error: {e}")
             return None
 
     def query(
-        self, query: str, limit: int = 10, min_score: float = 0.0
+        self,
+        query: str,
+        limit: int = 10,
+        min_score: float = 0.0,
+        collection: Optional[str] = None,
     ) -> Optional[list]:
         """
-        Hybrid search (BM25 + vector + LLM expansion).
+        Hybrid search (BM25 + vector).
 
         Args:
             query: Search query string
             limit: Max number of results
             min_score: Minimum relevance score
+            collection: Collection name to filter (None = search all collections)
 
         Returns:
             List of search results if successful, None otherwise
         """
         try:
             client = self._get_client()
-            response = client.post(
-                f"{self.base_url}/query",
-                json={"query": query, "limit": limit, "min_score": min_score},
-            )
+            body: dict = {"query": query, "limit": limit, "min_score": min_score}
+            if collection:
+                body["collection"] = collection
+            response = client.post(f"{self.base_url}/query", json=body)
             response.raise_for_status()
-
-            data = response.json()
-            return data.get("results", [])
-
+            return response.json().get("results", [])
         except Exception as e:
             logger.error(f"Hybrid search error: {e}")
             return None
