@@ -29,7 +29,7 @@ class LLMReranker:
 
     def __init__(
         self,
-        model_name: str = "onnx-community/Qwen3-Reranker-0.6B",
+        model_name: str = "thomasht86/Qwen3-Reranker-0.6B-int8-ONNX",
         local_reranker_path: Optional[Path] = None,
         local_expansion_path: Optional[Path] = None,
     ):
@@ -47,23 +47,23 @@ class LLMReranker:
         self._expansion_model = None
         self._expansion_tokenizer = None
         self._device = _get_device()
+        self._torch_device = "cuda" if self._device == "cuda" else "cpu"
         self._downloader: Optional[ModelDownloader] = None
 
     @property
     def model(self):
         if self._model is None:
             try:
-                from optimum.onnxruntime import ORTModelForSequenceClassification
+                import onnxruntime as ort
                 from transformers import AutoTokenizer
+                import torch  # 二次保险：确保 torch/lib DLL 目录已注册
 
                 # Determine model path (local > download)
                 model_path = self.model_name
                 if self.local_reranker_path and self.local_reranker_path.exists():
-                    # Check if directory is not empty
                     if any(self.local_reranker_path.iterdir()):
                         model_path = str(self.local_reranker_path)
                 else:
-                    # Try downloader cache
                     if self._downloader is None:
                         self._downloader = ModelDownloader()
                     cached = self._downloader.get_model_path("reranker")
@@ -75,27 +75,39 @@ class LLMReranker:
                     if self._device == "cuda"
                     else "CPUExecutionProvider"
                 )
+                onnx_path = str(Path(model_path) / "model.onnx")
+                print(f"[Reranker] Loading from: {onnx_path} (provider: {provider})")
                 self._tokenizer = AutoTokenizer.from_pretrained(model_path)
-                self._model = ORTModelForSequenceClassification.from_pretrained(
-                    model_path,
-                    file_name="onnx/model_q4f16.onnx",
-                    provider=provider,
-                )
-            except ImportError:
-                print(
-                    "Warning: optimum[onnxruntime] not installed. Reranking will be disabled."
-                )
+                try:
+                    self._model = ort.InferenceSession(
+                        onnx_path,
+                        providers=[provider, "CPUExecutionProvider"],
+                    )
+                    print(f"[Reranker] ORT session OK, providers: {self._model.get_providers()}")
+                except Exception as cuda_err:
+                    if provider == "CUDAExecutionProvider":
+                        print(f"[Reranker] CUDA load failed ({cuda_err}), retrying with CPU...")
+                        self._torch_device = "cpu"
+                        self._model = ort.InferenceSession(
+                            onnx_path,
+                            providers=["CPUExecutionProvider"],
+                        )
+                        print("[Reranker] Loaded on CPU")
+                    else:
+                        raise
+            except Exception as e:
+                print(f"Warning: Failed to load reranker model: {type(e).__name__}: {e}")
         return self._model
 
     @property
     def expansion_model(self):
         if self._expansion_model is None:
             try:
-                from optimum.onnxruntime import ORTModelForCausalLM
                 from transformers import AutoTokenizer
+                import torch  # 二次保险：确保 torch/lib DLL 目录已注册
 
                 # Determine model path (local > download)
-                model_name = "onnx-community/Qwen3-0.6B-Instruct-ONNX"
+                model_name = "onnx-community/Qwen3-0.6B-ONNX"
                 model_path = model_name
 
                 if self.local_expansion_path and self.local_expansion_path.exists():
@@ -115,17 +127,33 @@ class LLMReranker:
                     if self._device == "cuda"
                     else "CPUExecutionProvider"
                 )
+                import onnxruntime as ort
+                onnx_path = str(Path(model_path) / "onnx" / "model_int8.onnx")
+                print(f"[Expansion] Loading from: {onnx_path} (provider: {provider})")
                 self._expansion_tokenizer = AutoTokenizer.from_pretrained(model_path)
-                self._expansion_model = ORTModelForCausalLM.from_pretrained(
-                    model_path,
-                    file_name="onnx/model_q4f16.onnx",
-                    provider=provider,
-                    use_cache=True,
-                )
-            except ImportError:
+                try:
+                    self._expansion_model = ort.InferenceSession(
+                        onnx_path,
+                        providers=[provider, "CPUExecutionProvider"],
+                    )
+                    print(f"[Expansion] ORT session OK, providers: {self._expansion_model.get_providers()}")
+                except Exception as cuda_err:
+                    if provider == "CUDAExecutionProvider":
+                        print(f"[Expansion] CUDA load failed ({cuda_err}), retrying with CPU...")
+                        self._torch_device = "cpu"
+                        self._expansion_model = ort.InferenceSession(
+                            onnx_path,
+                            providers=["CPUExecutionProvider"],
+                        )
+                        print("[Expansion] Loaded on CPU")
+                    else:
+                        raise
+            except ImportError as e:
                 print(
-                    "Warning: optimum[onnxruntime] not installed. Query expansion will be disabled."
+                    f"Warning: optimum[onnxruntime] not installed. Query expansion will be disabled. ({e})"
                 )
+            except Exception as e:
+                print(f"Warning: Failed to load expansion model: {type(e).__name__}: {e}")
         return self._expansion_model
 
     def expand_query(self, query: str) -> List[str]:
@@ -134,28 +162,102 @@ class LLMReranker:
             return [query]
 
         try:
-            prompt = f"""Given the following search query, generate 2 alternative search queries that capture the same intent but use different wording or synonyms. Return only the variants, one per line.
+            # Use ChatML format for Qwen3 (apply_chat_template)
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Given the following search query, generate 2 alternative "
+                        f"search queries that capture the same intent but use different "
+                        f"wording or synonyms. Return only the variants, one per line.\n\n"
+                        f"Query: {query}"
+                    ),
+                }
+            ]
+            try:
+                prompt = self._expansion_tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            except Exception:
+                prompt = (
+                    f"Given the following search query, generate 2 alternative search "
+                    f"queries that capture the same intent but use different wording or "
+                    f"synonyms. Return only the variants, one per line.\n\nQuery: {query}\n"
+                )
 
-Query: {query}
-"""
+            import numpy as np
+            enc = self._expansion_tokenizer(prompt, return_tensors="np", truncation=True, max_length=512)
+            input_ids = enc["input_ids"]          # (1, seq)
+            attention_mask = enc["attention_mask"]  # (1, seq)
 
-            inputs = self._expansion_tokenizer(prompt, return_tensors="pt")
+            # ORT session: 28 layers, 8 kv_heads, head_dim=128
+            ort_session = self._expansion_model  # raw InferenceSession stored here
+            NUM_LAYERS = 28
+            KV_HEADS = 8
+            HEAD_DIM = 128
 
-            outputs = self._expansion_model.generate(
-                **inputs,
-                max_new_tokens=50,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=self._expansion_tokenizer.eos_token_id,
-            )
+            generated = input_ids.copy()  # (1, seq)
 
+            # Initialize empty KV cache
+            past_seq = 0
+            pkv = {
+                f"past_key_values.{i}.{kv}": np.zeros(
+                    (1, KV_HEADS, past_seq, HEAD_DIM), dtype=np.float32
+                )
+                for i in range(NUM_LAYERS)
+                for kv in ("key", "value")
+            }
+
+            eos_id = self._expansion_tokenizer.eos_token_id
+
+            for _ in range(50):  # max_new_tokens
+                seq_len = generated.shape[1]
+                pos_ids = np.arange(past_seq, past_seq + 1, dtype=np.int64).reshape(1, 1)
+                attn_mask = np.ones((1, past_seq + seq_len if past_seq == 0 else past_seq + 1), dtype=np.int64)
+
+                if past_seq == 0:
+                    # Prefill: process entire prompt
+                    cur_input = generated
+                    pos_ids = np.arange(seq_len, dtype=np.int64).reshape(1, seq_len)
+                    attn_mask = attention_mask
+                else:
+                    # Decode: process one token at a time
+                    cur_input = generated[:, -1:]
+
+                feeds = {
+                    "input_ids": cur_input,
+                    "attention_mask": attn_mask,
+                    "position_ids": pos_ids,
+                    **pkv,
+                }
+
+                outs = ort_session.run(None, feeds)
+                logits = outs[0]  # (1, step_seq, vocab)
+
+                # Update KV cache from outputs
+                out_names = [o.name for o in ort_session.get_outputs()]
+                new_pkv = {}
+                for i, name in enumerate(out_names):
+                    if "present" in name or "past" in name:
+                        new_pkv[name.replace("present", "past_key_values")] = outs[i]
+                if new_pkv:
+                    pkv = new_pkv
+                    past_seq = list(pkv.values())[0].shape[2]
+                else:
+                    past_seq += cur_input.shape[1]
+
+                # Greedy: argmax on last token logits
+                next_token = int(logits[0, -1].argmax())
+                if next_token == eos_id:
+                    break
+                generated = np.concatenate(
+                    [generated, np.array([[next_token]], dtype=np.int64)], axis=1
+                )
+
+            input_len = input_ids.shape[1]
             response = self._expansion_tokenizer.decode(
-                outputs[0], skip_special_tokens=True
-            )
-
-            # Parse variants (after "Query:" line)
-            if "Query:" in response:
-                response = response.split("Query:")[-1].strip()
+                generated[0][input_len:], skip_special_tokens=True
+            ).strip()
 
             variants = [v.strip() for v in response.split("\n") if v.strip()]
             return [query] + variants[:2]
@@ -175,26 +277,56 @@ Query: {query}
 
         # Prepare pairs for cross-encoder
         # Use content if available, otherwise title
-        pairs = [[query, doc.get("content", doc.get("title", ""))] for doc in documents]
-
         try:
-            inputs = self._tokenizer(
-                pairs,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-                max_length=512,
+            import numpy as np
+            import math
+            # Qwen3-Reranker: causal LM, score = P(yes) via softmax over yes/no logits
+            YES_TOKEN_ID = 9693
+            NO_TOKEN_ID = 2152
+
+            SYSTEM_PROMPT = (
+                'Judge whether the Document meets the requirements based on the Query '
+                'and the Candidate Document, output "yes" or "no" to indicate '
+                'the relevance of the document.'
             )
-            outputs = self._model(**inputs)
-            scores = outputs.logits.squeeze(-1)
 
-            # If scores is 1D (for multiple documents) or 0D (for single)
-            if scores.dim() == 0:
-                scores = scores.unsqueeze(0)
+            def _make_input(query: str, doc: str) -> str:
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"<Query>{query}</Query>\n<Document>{doc}</Document>"},
+                ]
+                return self._tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                ) + "<think>\n\n</think>\n\n"
 
-            # Add scores to documents
+            ort_session = self._model
+            batch_scores = []
+            for query_text, doc_text in [[query, doc.get("content", doc.get("title", ""))] for doc in documents]:
+                prompt = _make_input(query_text, doc_text)
+                enc = self._tokenizer(
+                    prompt, return_tensors="np", truncation=True, max_length=512
+                )
+                seq = enc["input_ids"].shape[1]
+                pos_ids = np.arange(seq, dtype=np.int64).reshape(1, seq)
+                outs = ort_session.run(
+                    None,
+                    {
+                        "input_ids": enc["input_ids"],
+                        "attention_mask": enc["attention_mask"],
+                        "position_ids": pos_ids,
+                    },
+                )
+                last_logits = outs[0][0, -1, :]  # (vocab,)
+                yes_logit = float(last_logits[YES_TOKEN_ID])
+                no_logit = float(last_logits[NO_TOKEN_ID])
+                # Softmax over yes/no: P(yes)
+                exp_yes = math.exp(yes_logit - max(yes_logit, no_logit))
+                exp_no  = math.exp(no_logit  - max(yes_logit, no_logit))
+                score = exp_yes / (exp_yes + exp_no)
+                batch_scores.append(score)
+
             for i, doc in enumerate(documents):
-                doc["rerank_score"] = float(scores[i])
+                doc["rerank_score"] = batch_scores[i]
 
             # Sort by rerank_score
             reranked = sorted(

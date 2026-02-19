@@ -81,18 +81,18 @@ class ModelDownloader:
             "dim": 768,                                        # 向量维度 Jina v2 ZH
         },
         "reranker": {
-            "hf": "onnx-community/Qwen3-Reranker-0.6B",
-            "ms": "Qwen/Qwen3-Reranker-0.6B",
-            "size_mb": 400,
+            "hf": "thomasht86/Qwen3-Reranker-0.6B-int8-ONNX",
+            "ms": "thomasht86/Qwen3-Reranker-0.6B-int8-ONNX",
+            "size_mb": 600,
             "type": "onnx-reranker",
-            "model_file": "onnx/model_q4f16.onnx",
+            "model_file": "model.onnx",                       # 根目录，无 onnx/ 子目录
         },
         "expansion": {
-            "hf": "onnx-community/Qwen3-0.6B-Instruct-ONNX",
-            "ms": "Qwen/Qwen2.5-0.5B-Instruct",
-            "size_mb": 400,
+            "hf": "onnx-community/Qwen3-0.6B-ONNX",
+            "ms": "onnx-community/Qwen3-0.6B-ONNX",
+            "size_mb": 589,
             "type": "onnx-causal-lm",
-            "model_file": "onnx/model_q4f16.onnx",
+            "model_file": "onnx/model_int8.onnx",
         },
     }
 
@@ -106,7 +106,7 @@ class ModelDownloader:
         """
         if cache_dir is None:
             home = Path.home()
-            cache_dir = home / ".cache" / "qmd" / "models"
+            cache_dir = home / ".qmd" / "models"
 
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -186,10 +186,11 @@ class ModelDownloader:
         """Select download source based on location and config."""
         model_info = self.MODELS[model_key]
 
-        # Explicit source specified
-        if self.model_source in ["huggingface", "modelscope"]:
-            source_type = "hf" if self.model_source == "huggingface" else "ms"
-            return model_info[source_type]
+        # Explicit source specified (accept both short and long names)
+        if self.model_source in ["huggingface", "hf"]:
+            return model_info["hf"]
+        if self.model_source in ["modelscope", "ms"]:
+            return model_info["ms"]
 
         # Auto-detect location
         location = _detect_location()
@@ -303,15 +304,20 @@ class ModelDownloader:
     def get_model_path(self, model_key: str) -> Optional[Path]:
         """Get cached model path without downloading.
 
-        Returns directory path for PyTorch models, None for GGUF (used separately).
+        Returns directory path only if the expected ONNX model file exists.
         """
-        # Try directory model first (PyTorch/safetensors)
-        model_name = self.MODELS[model_key]["type"] + "_" + model_key
-        local_path = self.cache_dir / model_name
-        if local_path.exists() and local_path.is_dir():
-            return local_path
+        model_info = self.MODELS[model_key]
+        model_dir_name = model_info["type"] + "_" + model_key
+        local_path = self.cache_dir / model_dir_name
+        if not local_path.exists() or not local_path.is_dir():
+            return None
 
-        return None
+        # Verify the expected ONNX file actually exists
+        expected_file = model_info.get("model_file")
+        if expected_file and not (local_path / expected_file).exists():
+            return None
+
+        return local_path
 
     def check_availability(self) -> Dict[str, bool]:
         """Check which models are already cached."""

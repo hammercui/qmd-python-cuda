@@ -74,6 +74,20 @@ def create_app() -> FastAPI:
         """Initialize model and search engines on startup."""
         import qmd.server._state as _state_mod
 
+        # Register torch/lib DLL directory on Windows BEFORE any onnxruntime CUDA
+        # session is created. fastembed-gpu triggers onnxruntime CUDA init, which
+        # needs cufftw64_11.dll from torch/lib. Must happen before fastembed import.
+        try:
+            import os, torch
+            if os.name == "nt":
+                import pathlib
+                torch_lib = pathlib.Path(torch.__file__).parent / "lib"
+                if torch_lib.exists():
+                    os.add_dll_directory(str(torch_lib))
+                    logger.info(f"Registered DLL directory: {torch_lib}")
+        except ImportError:
+            pass  # torch not installed, skip
+
         try:
             from qmd.models.config import AppConfig
 
@@ -98,6 +112,13 @@ def create_app() -> FastAPI:
             _state_mod.model = TextEmbedding(**load_kwargs)
             _state_mod.processing_lock = asyncio.Lock()
             logger.info("Embed model loaded successfully")
+
+            # Warm up reranker (cross-encoder) + query expansion model
+            logger.info("Warming up reranker and query expansion models...")
+            from qmd.server._endpoints import get_reranker
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, get_reranker)
+            logger.info("All models warmed up, server ready")
 
         except Exception as e:
             logger.error(f"Failed to initialize server: {e}")

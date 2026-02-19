@@ -26,7 +26,7 @@ embed_job_lock: Optional[asyncio.Lock] = None
 
 # Model configuration
 DEFAULT_MODEL = (
-    "jinaai/jina-embeddings-v2-base-zh-q4f16"  # Jina v2 ZH INT8 ONNX (Xenova), 768d
+    "jinaai/jina-embeddings-v2-base-zh-int8"  # Jina v2 ZH INT8 ONNX (Xenova), 768d
 )
 
 # GPU batch size for embedding inference.

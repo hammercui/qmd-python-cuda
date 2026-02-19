@@ -30,7 +30,7 @@ _JINA_ZH_REGISTERED = False
 
 # Logical model name used across the codebase
 # Use a custom name to avoid conflict with fastembed's built-in full-precision registration
-EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v2-base-zh-q4f16"
+EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v2-base-zh-int8"
 
 # Jina v2 ZH: Mean pooling, 768d, Chinese+English
 JINA_ZH_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -38,7 +38,7 @@ JINA_ZH_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 def _register_jina_zh():
     """
-    Register jinaai/jina-embeddings-v2-base-zh-q4f16 (Xenova quantized) with fastembed.
+    Register jinaai/jina-embeddings-v2-base-zh-int8 (Xenova quantized) with fastembed.
     Source: Xenova/jina-embeddings-v2-base-zh, onnx/model_int8.onnx (~161 MB, 768d)
     Supports Chinese and English. Must be called once per process before TextEmbedding().
     """
@@ -62,10 +62,10 @@ def _register_jina_zh():
                 description="Jina Embeddings v2 Base ZH, INT8 ONNX, 768d, Chinese+English",
                 size_in_gb=0.16,
             )
-            logger.info("jinaai/jina-embeddings-v2-base-zh-q4f16 registered (providers: CUDA+CPU)")
+            logger.info("jinaai/jina-embeddings-v2-base-zh-int8 registered (providers: CUDA+CPU)")
         except ValueError as ve:
             if "already registered" in str(ve):
-                logger.info("jinaai/jina-embeddings-v2-base-zh-q4f16 already registered, skipping")
+                logger.info("jinaai/jina-embeddings-v2-base-zh-int8 already registered, skipping")
             else:
                 raise
 
@@ -150,31 +150,49 @@ class LLMEngine:
             logger.info("QMD_FORCE_SERVER env detected, using server mode")
             return "server"
 
-        # Auto-detect based on VRAM
+        # Auto-detect based on VRAM (onnxruntime + nvidia-smi, no torch required)
         try:
-            import torch
+            import onnxruntime as ort
 
-            if torch.cuda.is_available():
-                total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-                free_gb = (
-                    torch.cuda.get_device_properties(0).total_memory
-                    - torch.cuda.memory_allocated(0)
-                ) / 1e9
-
-                logger.info(f"Detected {total_gb:.1f}GB VRAM (~{free_gb:.1f}GB free)")
-
-                # VRAM < 8GB: Use server mode (avoid OOM)
-                if total_gb < 8:
-                    logger.info("Low VRAM (<8GB), using server mode (shared model)")
-                    return "server"
-                else:
-                    logger.info("Sufficient VRAM (>=8GB), using standalone mode")
-                    return "standalone"
-            else:
+            providers = ort.get_available_providers()
+            if "CUDAExecutionProvider" not in providers:
                 logger.info("No CUDA detected, using standalone mode")
                 return "standalone"
+
+            # CUDA available – query VRAM via nvidia-smi (present on any NVIDIA driver)
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=memory.total",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    total_mb = int(result.stdout.strip().split("\n")[0])
+                    total_gb = total_mb / 1024
+                    logger.info(f"Detected {total_gb:.1f}GB VRAM")
+
+                    if total_gb < 8:
+                        logger.info("Low VRAM (<8GB), using server mode (shared model)")
+                        return "server"
+                    else:
+                        logger.info("Sufficient VRAM (>=8GB), using standalone mode")
+                        return "standalone"
+            except Exception as smi_err:
+                logger.warning(f"nvidia-smi query failed: {smi_err}")
+
+            # CUDA present but VRAM unknown – default to server (safer for 6GB GPUs)
+            logger.warning("CUDA detected but VRAM size unknown, defaulting to server (safer)")
+            return "server"
+
         except Exception as e:
-            logger.warning(f"VRAM detection failed: {e}, defaulting to server (safer)")
+            logger.warning(f"Device detection failed: {e}, defaulting to server (safer)")
             return "server"
 
     def _init_client(self) -> None:

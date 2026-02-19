@@ -21,6 +21,13 @@ class SearchResult(BaseModel):
     body: str
     score: float
     hash: str
+    collection: str  # extracted from display_path prefix
+
+    @property
+    def path(self) -> str:
+        """Document path within the collection (everything after first '/')."""
+        parts = self.display_path.split("/", 1)
+        return parts[1] if len(parts) > 1 else self.display_path
 
 
 class VectorSearch:
@@ -167,6 +174,7 @@ class VectorSearch:
                         body=row["body"],
                         score=score,
                         hash=row["hash"],
+                        collection=row["collection"],
                     )
                 )
 

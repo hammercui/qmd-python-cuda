@@ -64,10 +64,10 @@ def get_vector_search():
         # Inject the server's already-loaded model so VectorSearch
         # doesn't create a second fastembed instance or HTTP-call itself.
         vector_search = VectorSearch(
-            db_dir=None,
+            db_path=None,
             embed_fn=make_embed_fn(),
         )
-        logger.info("VectorSearch initialized at %s", vector_search.db_dir)
+        logger.info("VectorSearch initialized at %s", vector_search.db_path)
     return vector_search
 
 
@@ -359,10 +359,10 @@ async def query(request: QueryRequest):
                     did = f"{r.collection}:{r.path}"
                     if did not in doc_info:
                         doc_info[did] = {
-                            "title": r.metadata.get("title", ""),
+                            "title": r.title,
                             "collection": r.collection,
                             "path": r.path,
-                            "content": r.content,
+                            "content": r.body,
                             "type": "vector",
                         }
                     else:

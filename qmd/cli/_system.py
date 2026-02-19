@@ -89,13 +89,21 @@ def check(ctx_obj, download):
     console.print("\n[bold]Dependencies:[/bold]")
     deps_status = {}
 
-    # Check torch
+    # Check onnxruntime
     try:
-        import torch
+        import onnxruntime
 
-        deps_status["torch"] = ("✓", f"v{torch.__version__}")
+        deps_status["onnxruntime"] = ("✓", f"v{onnxruntime.__version__}")
     except ImportError:
-        deps_status["torch"] = ("✗", "Not installed")
+        deps_status["onnxruntime"] = ("✗", "Not installed")
+
+    # Check optimum
+    try:
+        import optimum
+
+        deps_status["optimum"] = ("✓", f"v{optimum.__version__}")
+    except ImportError:
+        deps_status["optimum"] = ("✗", "Not installed")
 
     # Check transformers
     try:
@@ -116,49 +124,40 @@ def check(ctx_obj, download):
     # Check device and CUDA
     console.print("\n[bold]Device:[/bold]")
     try:
-        import torch
+        import onnxruntime as ort
         import platform
+        import subprocess
 
-        if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            gpu_count = torch.cuda.device_count()
-            console.print(f"  [green]OK CUDA[/green]: {gpu_name}")
-            console.print(f"  [dim]GPU Count: {gpu_count}[/dim]")
-            console.print(f"  [dim]CUDA Version: {torch.version.cuda}[/dim]")
-            console.print(f"  [dim]PyTorch Version: {torch.__version__}[/dim]")
-
-            # Check each GPU
-            for i in range(gpu_count):
-                props = torch.cuda.get_device_properties(i)
-                vram_gb = props.total_memory / (1024**3)
-                console.print(
-                    f"  [dim]GPU {i}: {props.name} ({vram_gb:.1f} GB, Compute {props.major}.{props.minor})[/dim]"
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in providers:
+            # Query GPU info via nvidia-smi (no torch needed)
+            try:
+                smi = subprocess.run(
+                    ["nvidia-smi",
+                     "--query-gpu=name,memory.total,driver_version",
+                     "--format=csv,noheader"],
+                    capture_output=True, text=True, timeout=5,
                 )
+                if smi.returncode == 0:
+                    for line in smi.stdout.strip().splitlines():
+                        name, mem, drv = [x.strip() for x in line.split(",")]
+                        console.print(f"  [green]OK CUDA[/green]: {name}")
+                        console.print(f"  [dim]VRAM: {mem}  Driver: {drv}[/dim]")
+                else:
+                    console.print("  [green]OK CUDA[/green]: (nvidia-smi unavailable)")
+            except Exception:
+                console.print("  [green]OK CUDA[/green]: (nvidia-smi unavailable)")
+            console.print(f"  [dim]OnnxRuntime: v{ort.__version__}[/dim]")
+            console.print(f"  [dim]OS: {platform.system()}[/dim]")
         else:
-            system = platform.system()
-            console.print(f"  [yellow]WARN CPU-only[/yellow] (No CUDA detected)")
-            console.print(f"  [dim]OS: {system}[/dim]")
-            console.print(f"  [dim]PyTorch Version: {torch.__version__}[/dim]")
-
-            # Provide install instructions based on OS
-            if system == "Windows":
-                console.print("\n  [cyan]To enable CUDA on Windows:[/cyan]")
-                console.print(
-                    "  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y"
-                )
-                console.print(
-                    "  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
-                )
-            elif system == "Linux":
-                console.print("\n  [cyan]To enable CUDA on Linux:[/cyan]")
-                console.print(
-                    "  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y"
-                )
-                console.print(
-                    "  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
-                )
-    except ImportError:
-        console.print(f"  [red]X Cannot detect (torch not installed)[/red]")
+            console.print(f"  [yellow]WARN CPU-only[/yellow] (CUDAExecutionProvider not available)")
+            console.print(f"  [dim]OS: {platform.system()}[/dim]")
+            console.print(f"  [dim]OnnxRuntime: v{ort.__version__}[/dim]")
+            console.print(f"  [dim]Available providers: {', '.join(providers)}[/dim]")
+            console.print("\n  [cyan]To enable CUDA:[/cyan]")
+            console.print("  pip install onnxruntime-gpu")
+    except Exception as e:
+        console.print(f"  [red]X Cannot detect device: {e}[/red]")
 
     # Check models
     console.print("\n[bold]Models:[/bold]")
@@ -192,3 +191,45 @@ def check(ctx_obj, download):
             console.print(
                 f"  [yellow]     or:[/yellow] python -m qmd.models.downloader"
             )
+
+
+@click.command()
+@click.option("--model", "-m", default=None,
+              type=click.Choice(["embedding", "reranker", "expansion"]),
+              help="Only download a specific model (default: all)")
+@click.option("--source", "-s", default=None,
+              type=click.Choice(["hf", "ms"]),
+              help="Force download source: hf=HuggingFace, ms=ModelScope")
+def download(model, source):
+    """Download ONNX models (embedding / reranker / expansion)"""
+    from qmd.models.downloader import ModelDownloader
+
+    downloader = ModelDownloader(model_source=source)
+
+    if model:
+        console.print(f"[cyan]Downloading model:[/cyan] {model}")
+        try:
+            path = downloader._parallel_download(model)
+            if path:
+                console.print(f"[green]OK[/green] {model} → {path}")
+            else:
+                console.print(f"[red]FAIL[/red] {model}: download returned None")
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+    else:
+        console.print("[cyan]Downloading all models...[/cyan]")
+        availability = downloader.check_availability()
+        for key, available in availability.items():
+            if available:
+                console.print(f"[dim]  {key}: already downloaded, skipping[/dim]")
+            else:
+                console.print(f"  Downloading [bold]{key}[/bold]...")
+                try:
+                    path = downloader._parallel_download(key)
+                    if path:
+                        console.print(f"  [green]OK[/green] {key} → {path}")
+                    else:
+                        console.print(f"  [red]FAIL[/red] {key}: download returned None")
+                except Exception as e:
+                    console.print(f"  [red]FAIL[/red] {key}: {e}")
+        console.print("[green]Done.[/green]")

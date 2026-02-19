@@ -125,7 +125,7 @@ async def embed_worker() -> None:
                     seq=chunk["seq"],
                     pos=chunk["pos"],
                     embedding=embedding_to_bytes(emb.tolist()),
-                    model="jinaai/jina-embeddings-v2-base-zh-q4f16",
+                    model="jinaai/jina-embeddings-v2-base-zh-int8",
                     embedded_at=now,
                 )
                 done_hashes.add(chunk["hash"])
