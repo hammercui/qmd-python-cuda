@@ -72,25 +72,27 @@ class ModelDownloader:
     # Model definitions
     MODELS = {
         "embedding": {
-            "hf": "BAAI/bge-small-en-v1.5",
-            "ms": "XorPLM/bge-small-en-v1.5",
-            "size_mb": 130,
-            "type": "sentence-transformers",
-            "gguf": "hf:ggml-org/embeddinggemma-300M-Q8_0-GGUF",
+            "hf": "Xenova/jina-embeddings-v2-base-zh",
+            "ms": "Xenova/jina-embeddings-v2-base-zh",
+            "size_mb": 161,                                    # model_int8.onnx ~161 MB
+            "type": "onnx-int8",
+            "model_file": "onnx/model_int8.onnx",
+            "additional_files": [],
+            "dim": 768,                                        # 向量维度 Jina v2 ZH
         },
         "reranker": {
-            "hf": "Qwen/Qwen3-Reranker-0.6B",
+            "hf": "onnx-community/Qwen3-Reranker-0.6B",
             "ms": "Qwen/Qwen3-Reranker-0.6B",
-            "size_mb": 1200,
-            "type": "cross-encoder",
-            "gguf": "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf",
+            "size_mb": 400,
+            "type": "onnx-reranker",
+            "model_file": "onnx/model_q4f16.onnx",
         },
         "expansion": {
-            "hf": "Qwen/Qwen2.5-0.5B-Instruct",
+            "hf": "onnx-community/Qwen3-0.6B-Instruct-ONNX",
             "ms": "Qwen/Qwen2.5-0.5B-Instruct",
-            "size_mb": 1000,
-            "type": "llm",
-            "gguf": "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf",
+            "size_mb": 400,
+            "type": "onnx-causal-lm",
+            "model_file": "onnx/model_q4f16.onnx",
         },
     }
 

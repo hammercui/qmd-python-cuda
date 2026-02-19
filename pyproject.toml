@@ -12,10 +12,10 @@ authors = [
 dependencies = [
     "click>=8.1.0",
     "rich>=12.0.0",
-    "chromadb>=0.4.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
     "numpy>=1.24.0",
+    "sqlite-vec>=0.1.6",
 ]
 
 [tool.setuptools.packages.find]
@@ -25,28 +25,28 @@ exclude = ["test_docs*", "node_modules*", "tests*"]
 [project.optional-dependencies]
 # CPU-only installation (default, most compatible)
 cpu = [
-    "torch>=2.0.0",
     "fastembed>=0.2.0",
     "transformers>=4.30.0",
+    "optimum[onnxruntime]>=1.20.0",
 ]
 # CUDA GPU installation (for RTX 1660Ti/2060/3060/4060+)
 # 安装方式: pip install -e ".[cuda]" --index-url https://download.pytorch.org/whl/cu121
 cuda = [
-    "torch>=2.0.0",
     "fastembed-gpu>=0.7.0",
     "transformers>=4.30.0",
+    "optimum[onnxruntime]>=1.20.0",
 ]
 # CUDA 12.1 specific (recommended for Windows + NVIDIA GPUs)
 cuda121 = [
-    "torch>=2.5.0",
     "fastembed-gpu>=0.7.0",
     "transformers>=4.30.0",
+    "optimum[onnxruntime]>=1.20.0",
 ]
 # CUDA 12.4 specific (latest)
 cuda124 = [
-    "torch>=2.5.0",
     "fastembed-gpu>=0.7.0",
     "transformers>=4.30.0",
+    "optimum[onnxruntime]>=1.20.0",
 ]
 # MCP Server dependencies (for low VRAM systems)
 server = [

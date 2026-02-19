@@ -1,146 +1,72 @@
-import os
+"""
+Vector search implementation using sqlite-vec (two-step query).
+
+Replaces ChromaDB with sqlite-vec for better performance and
+compatibility with TypeScript implementation.
+"""
+
 import logging
-from pathlib import Path
-from typing import Callable, List, Dict, Any, Optional
-import chromadb
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from qmd.llm.engine import LLMEngine
+from qmd.utils.chunker import embedding_to_bytes
 
 logger = logging.getLogger(__name__)
 
 
-def _default_vector_db_dir() -> str:
-    """返回与 SQLite DB 同级的向量库绝对路径 ~/.qmd/vector_db。"""
-    return str(Path.home() / ".qmd" / "vector_db")
-
-
 class SearchResult(BaseModel):
-    path: str
-    collection: str
-    content: str
+    filepath: str  # "qmd://collection/path"
+    display_path: str  # "collection/path"
+    title: str
+    body: str
     score: float
-    metadata: Dict[str, Any] = {}
+    hash: str
 
 
 class VectorSearch:
     """
-    Vector search implementation using ChromaDB.
+    Vector search implementation using sqlite-vec.
 
-    Args:
-        db_dir: Directory for ChromaDB persistence.
-                Defaults to ~/.qmd/vector_db (absolute, shared between
-                CLI and server regardless of working directory).
-        mode: Embedding mode - "auto", "standalone", or "server"
-              - "auto": Auto-detect based on VRAM (default)
-              - "standalone": Always use local model
-              - "server": Always use MCP Server
-        server_url: MCP Server URL (used when mode="server")
+    Uses two-step query approach to avoid JOIN + MATCH deadlock.
+    See: SQLITE_MIGRATION_PLAN.md section 4.1
     """
 
     def __init__(
         self,
-        db_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
         mode: str = "auto",
         server_url: str = "http://localhost:18765",
-        embed_fn: Optional[Callable[[str], List[float]]] = None,
+        embed_fn: Optional[callable] = None,
     ):
-        # Always resolve to an absolute path so CLI and server share the same data
-        raw = db_dir or _default_vector_db_dir()
-        self.db_dir = str(Path(raw).expanduser().resolve())
-        os.makedirs(self.db_dir, exist_ok=True)
-        logger.debug("ChromaDB path: %s", self.db_dir)
-        self.client = chromadb.PersistentClient(path=self.db_dir)
-        # embed_fn takes precedence; falls back to LLMEngine
-        self._embed_fn = embed_fn
+        """
+        Args:
+            db_path: Path to SQLite database (default: ~/.qmd/qmd.db)
+            mode: Embedding mode - "auto", "standalone", or "server"
+            server_url: MCP Server URL (used when mode="server")
+            embed_fn: Optional custom embed function
+        """
+        if db_path is None:
+            from pathlib import Path
+
+            db_path = str(Path.home() / ".qmd" / "qmd.db")
+
+        self.db_path = db_path
+        self.embed_fn = embed_fn
         self.llm = None if embed_fn else LLMEngine(mode=mode, server_url=server_url)
 
-    def _get_collection(self, collection_name: str):
-        """Get or create a ChromaDB collection."""
-        return self.client.get_or_create_collection(
-            name=collection_name, metadata={"hnsw:space": "cosine"}
-        )
-
-    def _embed_query(self, text: str) -> List[float]:
-        """Embed a single query, using injected embed_fn if available."""
-        if self._embed_fn:
-            return self._embed_fn(text)
-        return self.llm.embed_query(text)
-
-    def add_documents(self, collection_name: str, documents: List[Dict[str, Any]]):
+    def _embed_query(self, text: str) -> bytes:
         """
-        Add documents to the vector store.
-        documents should have: id, content, metadata
+        Embed query and convert to bytes for sqlite-vec.
+
+        Returns:
+            bytes: float32 little-endian packed embedding
         """
-        collection = self._get_collection(collection_name)
-
-        ids = [doc["id"] for doc in documents]
-        contents = [doc["content"] for doc in documents]
-        metadatas = [doc.get("metadata", {}) for doc in documents]
-
-        # Generate embeddings
-        if self._embed_fn:
-            embeddings = [self._embed_fn(c) for c in contents]
+        if self.embed_fn:
+            embedding = self.embed_fn(text)
         else:
-            embeddings = self.llm.embed_texts(contents)
+            embedding = self.llm.embed_query(text)
 
-        collection.add(
-            ids=ids, embeddings=embeddings, documents=contents, metadatas=metadatas
-        )
-
-    def add_documents_with_embeddings(
-        self, collection_name: str, documents: List[Dict[str, Any]]
-    ):
-        """Add documents with pre-generated embeddings."""
-        collection = self._get_collection(collection_name)
-
-        ids = [doc["id"] for doc in documents]
-        contents = [doc["content"] for doc in documents]
-        metadatas = [doc.get("metadata", {}) for doc in documents]
-        embeddings = [doc["embedding"] for doc in documents]
-
-        collection.add(
-            ids=ids, embeddings=embeddings, documents=contents, metadatas=metadatas
-        )
-
-    def _search_one(
-        self, query_embedding: List[float], collection_name: str, limit: int
-    ) -> List[SearchResult]:
-        """Search a single named ChromaDB collection. Returns [] if empty/not ready."""
-        collection = self._get_collection(collection_name)
-        count = collection.count()
-        if count == 0:
-            logger.debug("Collection '%s' is empty, skipping.", collection_name)
-            return []
-        n_results = min(limit, count)
-        try:
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=n_results,
-                include=["documents", "metadatas", "distances"],
-            )
-        except Exception as e:
-            err = str(e).lower()
-            if "nothing found on disk" in err or "hnsw" in err or "no embeddings" in err:
-                logger.warning(
-                    "ChromaDB HNSW index not ready for collection '%s': %s",
-                    collection_name, e,
-                )
-                return []
-            raise
-        search_results = []
-        if results["ids"]:
-            for i in range(len(results["ids"][0])):
-                score = 1.0 - results["distances"][0][i]
-                search_results.append(
-                    SearchResult(
-                        path=results["metadatas"][0][i].get("path", ""),
-                        collection=collection_name,
-                        content=results["documents"][0][i],
-                        score=score,
-                        metadata=results["metadatas"][0][i],
-                    )
-                )
-        return search_results
+        return embedding_to_bytes(embedding)
 
     def search(
         self,
@@ -149,43 +75,119 @@ class VectorSearch:
         limit: int = 5,
     ) -> List[SearchResult]:
         """
-        Perform semantic search.
+        Perform semantic search using sqlite-vec two-step approach.
+
+        Step 1: Query vectors_vec for nearest neighbors (no JOIN)
+        Step 2: Fetch document metadata using hash_seq
 
         Args:
-            query: Search query string.
-            collection_name: ChromaDB collection to search.
-                             If None, searches across ALL collections and merges results.
-            limit: Maximum number of results to return.
+            query: Search query string
+            collection_name: Filter by collection (optional, for API compatibility)
+            limit: Max results to return
 
         Returns:
-            List of SearchResult sorted by score descending.
+            List of SearchResult sorted by score descending
         """
-        query_embedding = self._embed_query(query)
+        import sqlite3
+        import sqlite_vec
 
-        if collection_name:
-            # Search only the specified collection
-            results = self._search_one(query_embedding, collection_name, limit)
-        else:
-            # Search ALL collections and merge
-            all_cols = self.client.list_collections()
-            if not all_cols:
-                logger.warning(
-                    "No ChromaDB collections found in %s. Run 'qmd embed' first.",
-                    self.db_dir,
-                )
+        # Get query embedding as bytes
+        query_bytes = self._embed_query(query)
+
+        # Connect to database and load sqlite-vec
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+
+        try:
+            # Step 1: Query vectors_vec (no JOIN - avoids deadlock)
+            vec_rows = conn.execute(
+                """
+                SELECT hash_seq, distance
+                FROM vectors_vec
+                WHERE embedding MATCH ? AND k = ?
+                """,
+                (query_bytes, limit * 3),  # Get 3x for dedup
+            ).fetchall()
+
+            if not vec_rows:
                 return []
-            results = []
-            for col in all_cols:
-                partial = self._search_one(query_embedding, col.name, limit)
-                results.extend(partial)
-            # Merge: sort by score desc, deduplicate by (collection, path), take top-N
-            seen: set = set()
-            deduped: List[SearchResult] = []
-            for r in sorted(results, key=lambda x: x.score, reverse=True):
-                key = (r.collection, r.path)
-                if key not in seen:
-                    seen.add(key)
-                    deduped.append(r)
-            results = deduped[:limit]
 
-        return results
+            # Extract hash_seqs
+            hash_seqs = [row["hash_seq"] for row in vec_rows]
+            placeholders = ",".join(["?" for _ in hash_seqs])
+
+            # Step 2: Fetch document metadata with JOIN
+            sql = f"""
+                SELECT
+                    cv.hash || '_' || cv.seq as hash_seq,
+                    cv.hash,
+                    cv.pos,
+                    'qmd://' || d.collection || '/' || d.path as filepath,
+                    d.collection || '/' || d.path as display_path,
+                    d.title,
+                    d.collection,
+                    c.doc as body
+                FROM content_vectors cv
+                JOIN documents d ON d.hash = cv.hash AND d.active = 1
+                JOIN content c ON c.hash = d.hash
+                WHERE cv.hash || '_' || cv.seq IN ({placeholders})
+            """
+            params = list(hash_seqs)
+
+            if collection_name:
+                sql += " AND d.collection = ?"
+                params.append(collection_name)
+
+            doc_rows = conn.execute(sql, params).fetchall()
+
+            # Map hash_seq to distance
+            dist_map = {row["hash_seq"]: row["distance"] for row in vec_rows}
+
+            # Merge and dedup by (collection, path)
+            seen: set = set()
+            results: List[SearchResult] = []
+
+            for row in doc_rows:
+                key = (row["collection"], row["display_path"])
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                distance = dist_map.get(row["hash_seq"], 1.0)
+                score = 1.0 - distance  # Convert cosine distance to similarity
+
+                results.append(
+                    SearchResult(
+                        filepath=row["filepath"],
+                        display_path=row["display_path"],
+                        title=row["title"],
+                        body=row["body"],
+                        score=score,
+                        hash=row["hash"],
+                    )
+                )
+
+            # Sort by score descending and take top-N
+            results.sort(key=lambda x: x.score, reverse=True)
+            return results[:limit]
+
+        finally:
+            conn.close()
+
+    def add_documents_with_embeddings(
+        self, collection_name: str, documents: List[Dict[str, Any]]
+    ):
+        """
+        Legacy method for compatibility - now embeddings are handled
+        by DatabaseManager.insert_embedding().
+
+        This method is kept for API compatibility but does nothing.
+        """
+        logger.warning(
+            "add_documents_with_embeddings() is deprecated. "
+            "Use DatabaseManager.insert_embedding() instead."
+        )
+        pass

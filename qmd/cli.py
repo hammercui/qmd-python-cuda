@@ -17,14 +17,15 @@ console = Console()
 
 def _check_virtual_env():
     """Check if running in a virtual environment."""
-    in_venv = (
-        hasattr(sys, "real_prefix") or
-        (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
+    in_venv = hasattr(sys, "real_prefix") or (
+        hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
     )
 
     if not in_venv:
         console.print("[yellow]Warning: Not running in a virtual environment[/yellow]")
-        console.print("[dim]Recommendation: Create and activate a virtual environment[/dim]")
+        console.print(
+            "[dim]Recommendation: Create and activate a virtual environment[/dim]"
+        )
         console.print("[dim]  python -m venv .venv[/dim]")
         console.print("[dim]  .venv\\Scripts\\activate  (Windows)[/dim]")
         console.print("[dim]  source .venv/bin/activate  (Linux/macOS)[/dim]")
@@ -84,7 +85,12 @@ def config_set(ctx_obj, key, value):
 
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
-@click.option("--port", default=18765, type=int, help="Port to bind to (kill existing qmd server if occupied)")
+@click.option(
+    "--port",
+    default=18765,
+    type=int,
+    help="Port to bind to (kill existing qmd server if occupied)",
+)
 @click.option("--log-level", default="info", help="Log level")
 def server(host, port, log_level):
     """Start the QMD MCP Server for embedding service"""
@@ -105,6 +111,7 @@ def server(host, port, log_level):
     actual_port = port
     try:
         import socket
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", port))
         # 能绑定说明端口空闲，正常继续
@@ -113,6 +120,7 @@ def server(host, port, log_level):
         killed = False
         try:
             import psutil
+
             for conn in psutil.net_connections(kind="inet"):
                 if conn.laddr.port == port and conn.status == "LISTEN":
                     pid = conn.pid
@@ -121,9 +129,7 @@ def server(host, port, log_level):
                     try:
                         proc = psutil.Process(pid)
                         cmdline = " ".join(proc.cmdline())
-                        console.print(
-                            f"  PID {pid}: [dim]{cmdline[:80]}[/dim]"
-                        )
+                        console.print(f"  PID {pid}: [dim]{cmdline[:80]}[/dim]")
                         if "qmd" in cmdline and "server" in cmdline:
                             console.print(
                                 f"  [cyan]检测到旧的 qmd server，正在终止 PID {pid}...[/cyan]"
@@ -135,7 +141,7 @@ def server(host, port, log_level):
                                 proc.kill()
                                 proc.wait(timeout=3)
                             console.print(f"  [green]PID {pid} 已终止[/green]")
-                            time.sleep(0.5)   # 等待端口释放
+                            time.sleep(0.5)  # 等待端口释放
                             killed = True
                         else:
                             console.print(
@@ -164,9 +170,13 @@ def server(host, port, log_level):
     save_server_port(actual_port)
 
     console.print(f"[cyan]Starting QMD MCP Server[/cyan]")
-    console.print(f"Host: [magenta]{host}[/magenta], Port: [magenta]{actual_port}[/magenta]")
-    console.print(f"[dim]Embed model: BAAI/bge-small-en-v1.5[/dim]")
-    console.print(f"[dim]Reranker / Query Expansion: 首次调用 /expand /rerank 时懒加载[/dim]")
+    console.print(
+        f"Host: [magenta]{host}[/magenta], Port: [magenta]{actual_port}[/magenta]"
+    )
+    console.print(f"[dim]Embed model: jinaai/jina-embeddings-v2-base-zh (INT8, 768d, zh+en)[/dim]")
+    console.print(
+        f"[dim]Reranker / Query Expansion: 首次调用 /expand /rerank 时懒加载[/dim]"
+    )
     console.print("[yellow]Press Ctrl+C to stop[/yellow]")
 
     def signal_handler(sig, frame):
@@ -625,15 +635,25 @@ def status(ctx_obj):
 @cli.command()
 @click.option("--collection", help="Specific collection to embed")
 @click.option(
+    "--force", is_flag=True, help="Clear all existing embeddings and re-embed"
+)
+@click.option(
     "--mode",
     default="auto",
     type=click.Choice(["auto", "standalone", "server"]),
     help="Embedding mode: auto (default), standalone (local model), server (MCP server)",
 )
 @click.pass_obj
-def embed(ctx_obj, collection, mode):
-    """Generate embeddings for indexed documents"""
-    vsearch = VectorSearch(mode=mode)
+def embed(ctx_obj, collection, force, mode):
+    """Generate embeddings for indexed documents using Jina ZH (768d)"""
+    from qmd.llm.engine import LLMEngine
+    from qmd.utils.chunker import chunk_document, embedding_to_bytes
+    from datetime import datetime
+
+    # Initialize LLM engine
+    llm = LLMEngine(mode=mode)
+
+    # Get documents to embed
     docs = ctx_obj.db.get_all_active_documents()
 
     if collection:
@@ -643,78 +663,135 @@ def embed(ctx_obj, collection, mode):
         console.print("[yellow]No documents to embed.[/yellow]")
         return
 
-    console.print(f"Embedding [cyan]{len(docs)}[/cyan] documents...")
+    # Force mode: clear all embeddings first
+    if force:
+        console.print(
+            "[yellow]Force mode: clearing all existing embeddings...[/yellow]"
+        )
+        ctx_obj.db.clear_all_embeddings()
+
+    # Ensure vectors_vec table exists (768 dimensions for Jina ZH)
+    ctx_obj.db.ensure_vec_table(dimensions=768)
+
+    console.print(
+        f"Embedding [cyan]{len(docs)}[/cyan] documents with Jina ZH (768d)..."
+    )
 
     from collections import defaultdict
-    import numpy as np
     import time
     from rich.progress import Progress
 
     by_col = defaultdict(list)
     for d in docs:
-        embedding = None
-        if d.get("embedding"):
-            embedding = np.frombuffer(d["embedding"], dtype=np.float32).tolist()
+        # Check if already embedded (unless force mode)
+        if not force:
+            chunks = ctx_obj.db.get_chunks_for_hash(d["hash"])
+            if chunks:
+                # Already embedded, skip
+                by_col[d["collection"]].append(
+                    {
+                        "id": f"{d['collection']}:{d['path']}",
+                        "hash": d["hash"],
+                        "embedded": True,
+                    }
+                )
+                continue
 
         by_col[d["collection"]].append(
             {
                 "id": f"{d['collection']}:{d['path']}",
-                "content": d["content"],
                 "hash": d["hash"],
-                "embedding": embedding,
-                "metadata": {"path": d["path"], "title": d["title"]},
+                "content": d["content"],
+                "embedded": False,
             }
         )
 
-    total_to_embed = sum(
-        len([doc for doc in col_docs if doc["embedding"] is None])
-        for col_docs in by_col.values()
-    )
+    # Pre-collect all chunks per collection to get accurate chunk count for the
+    # progress bar. chunk_document is pure string ops (fast), pre-pass is cheap.
+    col_chunks: dict = {}  # col_name -> [{hash, seq, pos, text}]
+    total_chunks_all = 0
+    for col_name, col_docs in by_col.items():
+        to_embed_pre = [doc for doc in col_docs if not doc["embedded"]]
+        chunks_for_col = []
+        for doc in to_embed_pre:
+            for chunk in chunk_document(doc["content"]):
+                chunks_for_col.append(
+                    {
+                        "hash": doc["hash"],
+                        "seq": chunk["seq"],
+                        "pos": chunk["pos"],
+                        "text": chunk["text"],
+                    }
+                )
+        col_chunks[col_name] = chunks_for_col
+        total_chunks_all += len(chunks_for_col)
+
+    if total_chunks_all == 0:
+        console.print(
+            "[green]All documents already embedded. Use --force to re-embed.[/green]"
+        )
+        return
+
+    # Chunks per HTTP request to the server.
+    # Server holds the processing lock for exactly EMBED_BATCH / GPU_EMBED_BATCH_SIZE
+    # GPU micro-batches, keeping each lock acquisition to ~2-5 seconds.
+    EMBED_BATCH = 32
 
     with Progress() as progress:
-        task = progress.add_task("[cyan]Embedding...[/cyan]", total=total_to_embed)
+        task = progress.add_task("[cyan]Embedding...[/cyan]", total=total_chunks_all)
 
         for col_name, col_docs in by_col.items():
+            cached = [doc for doc in col_docs if doc["embedded"]]
+            all_chunks = col_chunks.get(col_name, [])
+
             console.print(
-                f"  Processing collection: [cyan]{col_name}[/cyan] ({len(col_docs)} docs)"
+                f"  Processing collection: [cyan]{col_name}[/cyan]"
+                f" ({len(col_docs)} docs, {len(all_chunks)} chunks)"
             )
-            to_embed = [doc for doc in col_docs if doc["embedding"] is None]
-            cached = [doc for doc in col_docs if doc["embedding"] is not None]
 
-            if to_embed:
+            if all_chunks:
                 start = time.time()
-                contents = [doc["content"] for doc in to_embed]
-                new_embeddings = vsearch.llm.embed_texts(contents)
+                done_in_col = 0
 
-                elapsed = time.time() - start
-                rate = len(to_embed) / elapsed if elapsed > 0 else 0
+                for i in range(0, len(all_chunks), EMBED_BATCH):
+                    batch = all_chunks[i : i + EMBED_BATCH]
+                    texts = [c["text"] for c in batch]
 
-                # Estimate remaining time
-                remaining = total_to_embed - progress.tasks[task].completed
-                if rate > 0 and remaining > 0:
-                    eta = remaining / rate
+                    embeddings = llm.embed_texts(texts)
+
+                    # Insert immediately after each batch — no need to hold
+                    # all embeddings in memory until collection is done
+                    now = datetime.now().isoformat()
+                    for chunk, embedding in zip(batch, embeddings):
+                        ctx_obj.db.insert_embedding(
+                            doc_hash=chunk["hash"],
+                            seq=chunk["seq"],
+                            pos=chunk["pos"],
+                            embedding=embedding_to_bytes(embedding),
+                            model="jinaai/jina-embeddings-v2-base-zh-q4f16",
+                            embedded_at=now,
+                        )
+
+                    done_in_col += len(batch)
+                    elapsed = time.time() - start
+                    rate = done_in_col / elapsed if elapsed > 0 else 0
+                    done_total = progress.tasks[task].completed + len(batch)
+                    eta = int((total_chunks_all - done_total) / rate) if rate > 0 else 0
+
+                    progress.advance(task, len(batch))
                     progress.update(
                         task,
-                        completed=len(to_embed),
-                        description=f"[cyan]{col_name}[/cyan] ({len(to_embed)} new, {int(eta)}s remaining)",
-                    )
-                else:
-                    progress.update(task, completed=len(to_embed))
-
-                for i, doc in enumerate(to_embed):
-                    doc["embedding"] = new_embeddings[i]
-                    ctx_obj.db.update_content_embedding(
-                        doc["hash"],
-                        np.array(new_embeddings[i], dtype=np.float32).tobytes(),
+                        description=(
+                            f"[cyan]{col_name}[/cyan]"
+                            f" {done_in_col}/{len(all_chunks)} chunks"
+                            + (f", {eta}s left" if eta > 0 else "")
+                        ),
                     )
 
             if cached:
-                progress.update(task, completed=len(cached))
                 console.print(
                     f"    Using cached embeddings for {len(cached)} documents"
                 )
-
-        vsearch.add_documents_with_embeddings(col_name, col_docs)
 
     console.print("[bold green]Embedding complete![/bold green]")
 
@@ -728,7 +805,11 @@ def vsearch(ctx_obj, query, collection, limit):
     """Semantic search using vector embeddings (via HTTP Server)"""
     from qmd.server.client import EmbedServerClient
 
-    scope = f"collection=[cyan]{collection}[/cyan]" if collection else "[dim]all collections[/dim]"
+    scope = (
+        f"collection=[cyan]{collection}[/cyan]"
+        if collection
+        else "[dim]all collections[/dim]"
+    )
     console.print(f"[dim]Searching via QMD Server ({scope})...[/dim]")
 
     try:
@@ -748,9 +829,9 @@ def vsearch(ctx_obj, query, collection, limit):
         for r in results:
             table.add_row(
                 f"{r.get('score', 0):.4f}",
-                r.get('title', 'N/A'),
-                r.get('collection', 'N/A'),
-                r.get('path', 'N/A')
+                r.get("title", "N/A"),
+                r.get("collection", "N/A"),
+                r.get("path", "N/A"),
             )
 
         console.print(table)
@@ -768,7 +849,11 @@ def query(ctx_obj, query, collection, limit):
     """Hybrid search (BM25 + Vector) via HTTP Server"""
     from qmd.server.client import EmbedServerClient
 
-    scope = f"collection=[cyan]{collection}[/cyan]" if collection else "[dim]all collections[/dim]"
+    scope = (
+        f"collection=[cyan]{collection}[/cyan]"
+        if collection
+        else "[dim]all collections[/dim]"
+    )
     console.print(f"Searching for: [bold cyan]{query}[/bold cyan] ({scope})...")
     console.print("[dim]Using QMD Server (hybrid search)[/dim]")
 
@@ -790,8 +875,8 @@ def query(ctx_obj, query, collection, limit):
             table.add_row(
                 str(i),
                 f"{r.get('score', 0):.4f}",
-                r.get('title', 'N/A'),
-                r.get('collection', 'N/A'),
+                r.get("title", "N/A"),
+                r.get("collection", "N/A"),
             )
 
         console.print(table)
@@ -858,7 +943,9 @@ def check(ctx_obj, download):
             for i in range(gpu_count):
                 props = torch.cuda.get_device_properties(i)
                 vram_gb = props.total_memory / (1024**3)
-                console.print(f"  [dim]GPU {i}: {props.name} ({vram_gb:.1f} GB, Compute {props.major}.{props.minor})[/dim]")
+                console.print(
+                    f"  [dim]GPU {i}: {props.name} ({vram_gb:.1f} GB, Compute {props.major}.{props.minor})[/dim]"
+                )
         else:
             system = platform.system()
             console.print(f"  [yellow]WARN CPU-only[/yellow] (No CUDA detected)")
@@ -868,12 +955,20 @@ def check(ctx_obj, download):
             # Provide install instructions based on OS
             if system == "Windows":
                 console.print("\n  [cyan]To enable CUDA on Windows:[/cyan]")
-                console.print("  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y")
-                console.print("  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+                console.print(
+                    "  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y"
+                )
+                console.print(
+                    "  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
+                )
             elif system == "Linux":
                 console.print("\n  [cyan]To enable CUDA on Linux:[/cyan]")
-                console.print("  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y")
-                console.print("  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+                console.print(
+                    "  1. Uninstall CPU version: pip uninstall torch torchvision torchaudio -y"
+                )
+                console.print(
+                    "  2. Install CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
+                )
     except ImportError:
         console.print(f"  [red]X Cannot detect (torch not installed)[/red]")
 

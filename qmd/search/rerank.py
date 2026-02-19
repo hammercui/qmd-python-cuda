@@ -8,11 +8,12 @@ from qmd.models.downloader import ModelDownloader
 def _get_device() -> str:
     """Auto-detect best available device (cuda > mps > cpu)."""
     try:
-        import torch
+        import onnxruntime as ort
 
-        if torch.cuda.is_available():
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in providers:
             return "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        elif "CoreMLExecutionProvider" in providers:
             return "mps"  # Apple Silicon
         else:
             return "cpu"
@@ -22,13 +23,13 @@ def _get_device() -> str:
 
 class LLMReranker:
     """
-    Reranker using local models (transformers).
+    Reranker using ONNX models (optimum + onnxruntime).
     Query Expansion + Cross-Encoder for Reranking.
     """
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-Reranker-0.6B",
+        model_name: str = "onnx-community/Qwen3-Reranker-0.6B",
         local_reranker_path: Optional[Path] = None,
         local_expansion_path: Optional[Path] = None,
     ):
@@ -52,11 +53,8 @@ class LLMReranker:
     def model(self):
         if self._model is None:
             try:
-                from transformers import (
-                    AutoTokenizer,
-                    AutoModelForSequenceClassification,
-                )
-                import torch
+                from optimum.onnxruntime import ORTModelForSequenceClassification
+                from transformers import AutoTokenizer
 
                 # Determine model path (local > download)
                 model_path = self.model_name
@@ -72,16 +70,20 @@ class LLMReranker:
                     if cached and any(cached.iterdir()):
                         model_path = str(cached)
 
-                self._tokenizer = AutoTokenizer.from_pretrained(model_path)
-                self._model = AutoModelForSequenceClassification.from_pretrained(
-                    model_path
+                provider = (
+                    "CUDAExecutionProvider"
+                    if self._device == "cuda"
+                    else "CPUExecutionProvider"
                 )
-                self._model.to(self._device)  # Move to detected device
-                self._model.eval()
-                self._torch = torch
+                self._tokenizer = AutoTokenizer.from_pretrained(model_path)
+                self._model = ORTModelForSequenceClassification.from_pretrained(
+                    model_path,
+                    file_name="onnx/model_q4f16.onnx",
+                    provider=provider,
+                )
             except ImportError:
                 print(
-                    "Warning: transformers or torch not installed. Reranking will be disabled."
+                    "Warning: optimum[onnxruntime] not installed. Reranking will be disabled."
                 )
         return self._model
 
@@ -89,11 +91,11 @@ class LLMReranker:
     def expansion_model(self):
         if self._expansion_model is None:
             try:
-                from transformers import AutoTokenizer, AutoModelForCausalLM
-                import torch
+                from optimum.onnxruntime import ORTModelForCausalLM
+                from transformers import AutoTokenizer
 
                 # Determine model path (local > download)
-                model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+                model_name = "onnx-community/Qwen3-0.6B-Instruct-ONNX"
                 model_path = model_name
 
                 if self.local_expansion_path and self.local_expansion_path.exists():
@@ -108,41 +110,44 @@ class LLMReranker:
                     if cached and any(cached.iterdir()):
                         model_path = str(cached)
 
+                provider = (
+                    "CUDAExecutionProvider"
+                    if self._device == "cuda"
+                    else "CPUExecutionProvider"
+                )
                 self._expansion_tokenizer = AutoTokenizer.from_pretrained(model_path)
-                self._expansion_model = AutoModelForCausalLM.from_pretrained(model_path)
-                self._expansion_model.to(self._device)  # Move to detected device
-                self._expansion_model.eval()
+                self._expansion_model = ORTModelForCausalLM.from_pretrained(
+                    model_path,
+                    file_name="onnx/model_q4f16.onnx",
+                    provider=provider,
+                    use_cache=True,
+                )
             except ImportError:
                 print(
-                    "Warning: transformers or torch not installed. Query expansion will be disabled."
+                    "Warning: optimum[onnxruntime] not installed. Query expansion will be disabled."
                 )
         return self._expansion_model
 
     def expand_query(self, query: str) -> List[str]:
-        """Expand query into 2-3 variants using local Qwen3."""
+        """Expand query into 2-3 variants using Qwen3-0.6B-Instruct ONNX."""
         if not self.expansion_model:
             return [query]
 
         try:
-            import torch
-
             prompt = f"""Given the following search query, generate 2 alternative search queries that capture the same intent but use different wording or synonyms. Return only the variants, one per line.
 
 Query: {query}
 """
 
             inputs = self._expansion_tokenizer(prompt, return_tensors="pt")
-            # Move inputs to device
-            inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
-            with torch.no_grad():
-                outputs = self._expansion_model.generate(
-                    **inputs,
-                    max_new_tokens=50,
-                    temperature=0.7,
-                    do_sample=True,
-                    pad_token_id=self._expansion_tokenizer.eos_token_id,
-                )
+            outputs = self._expansion_model.generate(
+                **inputs,
+                max_new_tokens=50,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=self._expansion_tokenizer.eos_token_id,
+            )
 
             response = self._expansion_tokenizer.decode(
                 outputs[0], skip_special_tokens=True
@@ -173,22 +178,19 @@ Query: {query}
         pairs = [[query, doc.get("content", doc.get("title", ""))] for doc in documents]
 
         try:
-            with self._torch.no_grad():
-                inputs = self._tokenizer(
-                    pairs,
-                    padding=True,
-                    truncation=True,
-                    return_tensors="pt",
-                    max_length=512,
-                )
-                # Move inputs to same device as model
-                inputs = {k: v.to(self._device) for k, v in inputs.items()}
-                outputs = self._model(**inputs)
-                scores = outputs.logits.squeeze(-1)
+            inputs = self._tokenizer(
+                pairs,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
+                max_length=512,
+            )
+            outputs = self._model(**inputs)
+            scores = outputs.logits.squeeze(-1)
 
-                # If scores is 1D (for multiple documents) or 0D (for single)
-                if scores.dim() == 0:
-                    scores = scores.unsqueeze(0)
+            # If scores is 1D (for multiple documents) or 0D (for single)
+            if scores.dim() == 0:
+                scores = scores.unsqueeze(0)
 
             # Add scores to documents
             for i, doc in enumerate(documents):

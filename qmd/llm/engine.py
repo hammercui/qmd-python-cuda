@@ -25,6 +25,57 @@ logger = logging.getLogger(__name__)
 # Environment variable to force server mode in auto
 FORCE_SERVER_MODE_ENV = "QMD_FORCE_SERVER"
 
+# Global flag to ensure Jina ZH is registered only once
+_JINA_ZH_REGISTERED = False
+
+# Logical model name used across the codebase
+# Use a custom name to avoid conflict with fastembed's built-in full-precision registration
+EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v2-base-zh-q4f16"
+
+# Jina v2 ZH: Mean pooling, 768d, Chinese+English
+JINA_ZH_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def _register_jina_zh():
+    """
+    Register jinaai/jina-embeddings-v2-base-zh-q4f16 (Xenova quantized) with fastembed.
+    Source: Xenova/jina-embeddings-v2-base-zh, onnx/model_int8.onnx (~161 MB, 768d)
+    Supports Chinese and English. Must be called once per process before TextEmbedding().
+    """
+    global _JINA_ZH_REGISTERED
+
+    if _JINA_ZH_REGISTERED:
+        return
+
+    try:
+        from fastembed.text.text_embedding import TextEmbedding
+        from fastembed.common.model_description import PoolingType, ModelSource
+
+        try:
+            TextEmbedding.add_custom_model(
+                model=EMBEDDING_MODEL_NAME,
+                pooling=PoolingType.MEAN,
+                normalization=True,
+                sources=ModelSource(hf="Xenova/jina-embeddings-v2-base-zh"),
+                dim=768,
+                model_file="onnx/model_int8.onnx",
+                description="Jina Embeddings v2 Base ZH, INT8 ONNX, 768d, Chinese+English",
+                size_in_gb=0.16,
+            )
+            logger.info("jinaai/jina-embeddings-v2-base-zh-q4f16 registered (providers: CUDA+CPU)")
+        except ValueError as ve:
+            if "already registered" in str(ve):
+                logger.info("jinaai/jina-embeddings-v2-base-zh-q4f16 already registered, skipping")
+            else:
+                raise
+
+        _JINA_ZH_REGISTERED = True
+    except ImportError:
+        logger.warning("fastembed not available, skipping Jina ZH registration")
+    except Exception as e:
+        logger.error(f"Failed to register Jina ZH: {e}")
+        raise
+
 
 class LLMEngine:
     """
@@ -34,12 +85,12 @@ class LLMEngine:
 
     def __init__(
         self,
-        model_name: str = "BAAI/bge-small-en-v1.5",
+        model_name: str = EMBEDDING_MODEL_NAME,
         cache_dir: Optional[str] = None,
         threads: Optional[int] = None,
         local_model_path: Optional[Path] = None,
         mode: str = "auto",
-        server_url: str = "http://localhost:8000",
+        server_url: str = "http://localhost:18765",
     ):
         """
         Args:
@@ -144,40 +195,21 @@ class LLMEngine:
         if self._model is not None:
             return
 
-        # Determine model path (local > cached > download)
-        model_path = self.model_name
+        # Register Jina ZH custom model if needed
+        if self.model_name == EMBEDDING_MODEL_NAME:
+            _register_jina_zh()
 
-        if self.local_model_path and self.local_model_path.exists():
-            # Use local path
-            model_path = str(self.local_model_path)
-        else:
-            # Try to use downloader to get cached path
-            if self._downloader is None:
-                self._downloader = ModelDownloader()
-
-            cached_path = self._downloader.get_model_path("embedding")
-            if cached_path:
-                model_path = str(cached_path)
-
-        # Load model
+        # Load model — fastembed manages its own cache at ~/.cache/fastembed/
         from fastembed import TextEmbedding
 
-        # Detect GPU providers
-        providers = None
-        try:
-            import torch
-            if torch.cuda.is_available():
-                # Use CUDA for faster inference
-                providers = ["CUDAExecutionProvider"]
-                logger.info("Using CUDAExecutionProvider for fastembed")
-        except ImportError:
-            pass
+        providers = JINA_ZH_PROVIDERS if self.model_name == EMBEDDING_MODEL_NAME else None
+        if providers:
+            logger.info(f"embed model providers: {providers}")
 
         self._model = TextEmbedding(
-            model_name=model_path,
-            cache_dir=self.cache_dir,
+            model_name=self.model_name,
             threads=self.threads,
-            providers=providers
+            **(dict(providers=providers) if providers else {}),
         )
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
@@ -211,7 +243,7 @@ class LLMEngine:
 
     def embed_query(self, text: str) -> List[float]:
         """
-        Generate embedding for a single query.
+        Generate embedding for a single query string.
 
         Args:
             text: Query string
@@ -219,7 +251,19 @@ class LLMEngine:
         Returns:
             Embedding vector
         """
-        return self.embed_texts([text])[0]
+        if self.mode == "server" and self._client is not None:
+            # Server handles prefix internally; just send raw text
+            result = self._client.embed_texts([text])
+            if result is not None:
+                return result[0]
+            logger.warning("MCP server unavailable, falling back to standalone")
+            self.mode = "standalone"
+            self._client = None
+
+        self._ensure_model()
+        assert self._model is not None
+
+        return list(self._model.embed([text]))[0].tolist()
 
     def close(self) -> None:
         """Cleanup resources."""

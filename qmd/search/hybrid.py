@@ -75,14 +75,18 @@ class HybridSearcher:
 
         # Process Vector results
         for rank, res in enumerate(vector_results, 1):
-            doc_id = f"{res.collection}:{res.path}"
+            # Parse display_path (format: "collection/path")
+            parts = res.display_path.split("/", 1)
+            collection = parts[0] if len(parts) > 1 else ""
+            path = parts[1] if len(parts) > 1 else res.display_path
+            doc_id = f"{collection}:{path}"
             scores[doc_id] += 1.0 / (k + rank)
             if doc_id not in doc_info:
                 doc_info[doc_id] = {
-                    "title": res.metadata.get("title", "N/A"),
-                    "collection": res.collection,
-                    "path": res.path,
-                    "content": res.content,
+                    "title": res.title,
+                    "collection": collection,
+                    "path": path,
+                    "content": res.body,
                     "type": "vector",
                 }
             else:

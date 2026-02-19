@@ -177,19 +177,30 @@ class EmbedServerClient:
         """
         Send embedding request to server.
 
+        Sends texts in client-side chunks of CLIENT_CHUNK_SIZE to avoid
+        large HTTP request bodies, then concatenates the results.
+
         Args:
             texts: List of text strings to embed
 
         Returns:
             List of embedding vectors if successful, None if server unavailable
         """
+        CLIENT_CHUNK_SIZE = 64  # safety cap; CLI already sends ≤32 per call
         try:
             client = self._get_client()
-            response = client.post(f"{self.base_url}/embed", json={"texts": texts})
-            response.raise_for_status()
+            all_embeddings: List[List[float]] = []
 
-            data = response.json()
-            return data["embeddings"]
+            for i in range(0, len(texts), CLIENT_CHUNK_SIZE):
+                chunk = texts[i : i + CLIENT_CHUNK_SIZE]
+                response = client.post(
+                    f"{self.base_url}/embed/batch",
+                    json={"texts": chunk},
+                )
+                response.raise_for_status()
+                all_embeddings.extend(response.json()["embeddings"])
+
+            return all_embeddings
 
         except httpx.ConnectError:
             logger.warning(f"Cannot connect to MCP server at {self.base_url}")
