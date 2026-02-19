@@ -4,6 +4,7 @@ import asyncio
 import json as json_lib
 import logging
 import math
+import time
 from collections import defaultdict
 from typing import List, Optional
 
@@ -301,21 +302,26 @@ async def query(request: QueryRequest):
         limit = request.limit
 
         # ── Step 1: Query expansion via LLM ──────────────────────────────
+        t0 = time.perf_counter()
         fts_queries = [request.query]
         vec_queries = [request.query]
         reranker = None
         try:
             reranker = get_reranker()
-            expanded = reranker.expand_query(request.query)
+            loop = asyncio.get_event_loop()
+            expanded = await loop.run_in_executor(
+                None, reranker.expand_query, request.query
+            )
             # expanded[0] is always the original query; [1:] are LLM-generated variants
             for v in expanded[1:]:
                 if v and v.strip() and v != request.query:
                     fts_queries.append(v)
                     vec_queries.append(v)
             logger.info(
-                "Query expansion: %d BM25 queries, %d vector queries",
+                "Query expansion: %d BM25 queries, %d vector queries (%.1fs)",
                 len(fts_queries),
                 len(vec_queries),
+                time.perf_counter() - t0,
             )
         except Exception as exp_err:
             logger.warning(
@@ -323,6 +329,7 @@ async def query(request: QueryRequest):
             )
 
         # ── Steps 2 + 3: Multi-query BM25 + vector → ranked id lists ─────
+        t1 = time.perf_counter()
         k = 60
         ranked_lists: list = []  # each element: [doc_id, ...] in rank order
         weights_list: list = []
@@ -368,10 +375,13 @@ async def query(request: QueryRequest):
                     else:
                         doc_info[did]["type"] = "hybrid"
 
+        logger.info("BM25+vector search: %.1fs", time.perf_counter() - t1)
+
         if not doc_info:
             return QueryResponse(results=[])
 
         # ── Step 4: Weighted Reciprocal Rank Fusion ──────────────────────
+        t2 = time.perf_counter()
         rrf_scores: dict = defaultdict(float)
         for ids, w in zip(ranked_lists, weights_list):
             for rank, did in enumerate(ids, 1):
@@ -388,12 +398,27 @@ async def query(request: QueryRequest):
                     **doc_info[did],
                 }
             )
+        logger.info("RRF fusion: %.1fs, %d candidates", time.perf_counter() - t2, len(rrf_ordered))
 
         # ── Step 5: LLM cross-encoder reranking ─────────────────────────
+        # Only rerank top-10 by RRF to limit latency; tail docs keep RRF order.
+        RERANK_TOP_N = 10
         if reranker is not None and rrf_ordered:
             try:
-                reranked = reranker.rerank(
-                    request.query, rrf_ordered, top_k=len(rrf_ordered)
+                t3 = time.perf_counter()
+                rerank_candidates = rrf_ordered[:RERANK_TOP_N]
+                loop = asyncio.get_event_loop()
+                reranked = await loop.run_in_executor(
+                    None, reranker.rerank,
+                    request.query, rerank_candidates, len(rerank_candidates)
+                )
+                # Append tail docs (beyond RERANK_TOP_N) in original RRF order
+                reranked_ids = {d["id"] for d in reranked}
+                for doc in rrf_ordered[RERANK_TOP_N:]:
+                    if doc["id"] not in reranked_ids:
+                        reranked.append(doc)
+                logger.info(
+                    "Reranking %d docs: %.1fs", len(rerank_candidates), time.perf_counter() - t3
                 )
 
                 # ── Step 6: Position-aware score blending ─────────────────
@@ -402,9 +427,8 @@ async def query(request: QueryRequest):
                 for doc in reranked:
                     rrf_rank = rrf_rank_map.get(doc.get("id", ""), 30)
                     rrf_s = float(rrf_scores.get(doc.get("id", ""), 0.0))
-                    raw_rerank = float(doc.get("rerank_score", 0.0))
-                    # Sigmoid-normalize the cross-encoder logit to [0, 1]
-                    norm_rerank = 1.0 / (1.0 + math.exp(-raw_rerank))
+                    # rerank_score is already P(yes) in [0,1] from yes/no logit softmax
+                    norm_rerank = float(doc.get("rerank_score", 0.5))
                     # Weight towards RRF for top positions (trust retrieval rank more)
                     if rrf_rank <= 3:
                         w_rrf = 0.75

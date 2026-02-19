@@ -1,4 +1,5 @@
 import os
+import time
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
@@ -78,23 +79,18 @@ class LLMReranker:
                 onnx_path = str(Path(model_path) / "model.onnx")
                 print(f"[Reranker] Loading from: {onnx_path} (provider: {provider})")
                 self._tokenizer = AutoTokenizer.from_pretrained(model_path)
+                # int8-quantized ONNX models run on CPU SIMD (VNNI/AVX512).
+                # CUDA EP fallbacks for quantized ops cause extreme CPU<->GPU copy overhead,
+                # making it far slower than pure CPUExecutionProvider.
+                # Force CPUExecutionProvider regardless of device.
                 try:
                     self._model = ort.InferenceSession(
                         onnx_path,
-                        providers=[provider, "CPUExecutionProvider"],
+                        providers=["CPUExecutionProvider"],
                     )
                     print(f"[Reranker] ORT session OK, providers: {self._model.get_providers()}")
                 except Exception as cuda_err:
-                    if provider == "CUDAExecutionProvider":
-                        print(f"[Reranker] CUDA load failed ({cuda_err}), retrying with CPU...")
-                        self._torch_device = "cpu"
-                        self._model = ort.InferenceSession(
-                            onnx_path,
-                            providers=["CPUExecutionProvider"],
-                        )
-                        print("[Reranker] Loaded on CPU")
-                    else:
-                        raise
+                    raise
             except Exception as e:
                 print(f"Warning: Failed to load reranker model: {type(e).__name__}: {e}")
         return self._model
@@ -128,7 +124,10 @@ class LLMReranker:
                     else "CPUExecutionProvider"
                 )
                 import onnxruntime as ort
-                onnx_path = str(Path(model_path) / "onnx" / "model_int8.onnx")
+                # Use model_q4f16.onnx: INT4 weights + FP16 activations.
+                # MatMulNBits (INT4) IS natively supported by CUDAExecutionProvider
+                # in onnxruntime >= 1.17, so no CPU fallback overhead.
+                onnx_path = str(Path(model_path) / "onnx" / "model_q4f16.onnx")
                 print(f"[Expansion] Loading from: {onnx_path} (provider: {provider})")
                 self._expansion_tokenizer = AutoTokenizer.from_pretrained(model_path)
                 try:
@@ -192,25 +191,31 @@ class LLMReranker:
 
             # ORT session: 28 layers, 8 kv_heads, head_dim=128
             ort_session = self._expansion_model  # raw InferenceSession stored here
+            print(f"[Expansion] providers active: {ort_session.get_providers()}")
             NUM_LAYERS = 28
             KV_HEADS = 8
             HEAD_DIM = 128
 
             generated = input_ids.copy()  # (1, seq)
 
-            # Initialize empty KV cache
+            # Initialize empty KV cache.
+            # q4f16 model expects float16 KV tensors; int8 model expects float32.
+            # Detect by checking if any input has float16 type.
+            _input_types = {inp.name: inp.type for inp in ort_session.get_inputs()}
+            _kv_dtype = np.float16 if any("float16" in t for t in _input_types.values()) else np.float32
             past_seq = 0
             pkv = {
                 f"past_key_values.{i}.{kv}": np.zeros(
-                    (1, KV_HEADS, past_seq, HEAD_DIM), dtype=np.float32
+                    (1, KV_HEADS, past_seq, HEAD_DIM), dtype=_kv_dtype
                 )
                 for i in range(NUM_LAYERS)
                 for kv in ("key", "value")
             }
 
             eos_id = self._expansion_tokenizer.eos_token_id
+            _t0 = time.perf_counter()
 
-            for _ in range(50):  # max_new_tokens
+            for step in range(25):  # max_new_tokens=25 (2 short variants fit in ~20 tokens)
                 seq_len = generated.shape[1]
                 pos_ids = np.arange(past_seq, past_seq + 1, dtype=np.int64).reshape(1, 1)
                 attn_mask = np.ones((1, past_seq + seq_len if past_seq == 0 else past_seq + 1), dtype=np.int64)
@@ -254,6 +259,7 @@ class LLMReranker:
                     [generated, np.array([[next_token]], dtype=np.int64)], axis=1
                 )
 
+            print(f"[Expansion] decode {step+1} steps, {time.perf_counter() - _t0:.2f}s")
             input_len = input_ids.shape[1]
             response = self._expansion_tokenizer.decode(
                 generated[0][input_len:], skip_special_tokens=True
@@ -300,11 +306,15 @@ class LLMReranker:
                 ) + "<think>\n\n</think>\n\n"
 
             ort_session = self._model
+            print(f"[Reranker] providers active: {ort_session.get_providers()}, docs={len(documents)}")
             batch_scores = []
+            _t0 = time.perf_counter()
             for query_text, doc_text in [[query, doc.get("content", doc.get("title", ""))] for doc in documents]:
+                # Truncate doc content: shorter seq → much smaller logits output
+                doc_text = doc_text[:300]
                 prompt = _make_input(query_text, doc_text)
                 enc = self._tokenizer(
-                    prompt, return_tensors="np", truncation=True, max_length=512
+                    prompt, return_tensors="np", truncation=True, max_length=128
                 )
                 seq = enc["input_ids"].shape[1]
                 pos_ids = np.arange(seq, dtype=np.int64).reshape(1, seq)
@@ -325,6 +335,7 @@ class LLMReranker:
                 score = exp_yes / (exp_yes + exp_no)
                 batch_scores.append(score)
 
+            print(f"[Reranker] {len(documents)} docs scored in {time.perf_counter()-_t0:.2f}s")
             for i, doc in enumerate(documents):
                 doc["rerank_score"] = batch_scores[i]
 

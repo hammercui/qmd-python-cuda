@@ -90,9 +90,9 @@ class ModelDownloader:
         "expansion": {
             "hf": "onnx-community/Qwen3-0.6B-ONNX",
             "ms": "onnx-community/Qwen3-0.6B-ONNX",
-            "size_mb": 589,
+            "size_mb": 544,
             "type": "onnx-causal-lm",
-            "model_file": "onnx/model_int8.onnx",
+            "model_file": "onnx/model_q4f16.onnx",  # INT4 weights + FP16 activations, GPU-native
         },
     }
 
