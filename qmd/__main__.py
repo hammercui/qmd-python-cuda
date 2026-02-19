@@ -1,4 +1,4 @@
-from .cli import cli
+from qmd.cli_main import cli
 
 if __name__ == "__main__":
     cli()
