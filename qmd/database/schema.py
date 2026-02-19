@@ -65,32 +65,37 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
 """
 
 # Triggers to keep FTS in sync
+# Note: always DROP before CREATE to ensure the latest definition is applied
+# (CREATE TRIGGER IF NOT EXISTS won't update an already-existing trigger)
 TRIGGERS = """
+DROP TRIGGER IF EXISTS documents_ai;
+DROP TRIGGER IF EXISTS documents_ad;
+DROP TRIGGER IF EXISTS documents_au;
+
 -- INSERT trigger: only insert when active=1
-CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents
+CREATE TRIGGER documents_ai AFTER INSERT ON documents
 WHEN new.active = 1
 BEGIN
   INSERT INTO documents_fts(rowid, filepath, title, body)
   SELECT new.id,
          new.collection || '/' || new.path,
          new.title,
-         (SELECT doc FROM content WHERE hash = new.hash)
-  WHERE new.active = 1;
+         (SELECT doc FROM content WHERE hash = new.hash);
 END;
 
 -- DELETE trigger
-CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
+CREATE TRIGGER documents_ad AFTER DELETE ON documents BEGIN
   DELETE FROM documents_fts WHERE rowid = old.id;
 END;
 
--- UPDATE trigger: handle active changes
-CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents
+-- UPDATE trigger: always remove old FTS entry first, then re-insert if still active.
+-- FTS5 does NOT reliably support INSERT OR REPLACE for existing rowids;
+-- the DELETE + INSERT pattern is the safe alternative.
+CREATE TRIGGER documents_au AFTER UPDATE ON documents
 BEGIN
-  -- Deactivated: remove from FTS
-  DELETE FROM documents_fts WHERE rowid = old.id AND new.active = 0;
-  
-  -- Activated or updated: insert/replace in FTS
-  INSERT OR REPLACE INTO documents_fts(rowid, filepath, title, body)
+  DELETE FROM documents_fts WHERE rowid = old.id;
+
+  INSERT INTO documents_fts(rowid, filepath, title, body)
   SELECT new.id,
          new.collection || '/' || new.path,
          new.title,

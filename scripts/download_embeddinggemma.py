@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 """
-EmbeddingGemma-300M Q4F16 ONNX 模型下载脚本
+Jina Embeddings v2 Base ZH INT8 ONNX 模型下载脚本
 
-从 onnx-community/embeddinggemma-300m-ONNX 下载 Q4F16 变体（~176 MB）。
-Q4 权重 + FP16 计算，支持 CUDA GPU 加速。
+从 Xenova/jina-embeddings-v2-base-zh 下载 INT8 变体（~161 MB）。
+支持中英文混合输入，8192 token 上下文，768 维输出。
 
 用法：
     python scripts/download_embeddinggemma.py           # 下载到默认路径
     python scripts/download_embeddinggemma.py --force   # 强制重新下载
     python scripts/download_embeddinggemma.py --check   # 仅检测，不下载
-    python scripts/download_embeddinggemma.py --model-dir D:/models/embeddinggemma
+    python scripts/download_embeddinggemma.py --model-dir D:/models/jina-zh
 
 国内加速（HF 镜像）：
     set HF_ENDPOINT=https://hf-mirror.com
@@ -25,20 +25,19 @@ from pathlib import Path
 # 常量
 # ──────────────────────────────────────────────────────────────────────────────
 
-REPO_ID    = "onnx-community/embeddinggemma-300m-ONNX"
-MODEL_NAME = "google/embeddinggemma-300m"
+REPO_ID    = "Xenova/jina-embeddings-v2-base-zh"
+MODEL_NAME = "jinaai/jina-embeddings-v2-base-zh-q4f16"   # 自定义逻辑名，避免与 fastembed 内置冲突
 
-# Q4F16：Q4 权重 + FP16 计算，~176 MB，CUDA GPU 兼容
+# INT8 ONNX：~161 MB，数值稳定，支持 CUDA / CPU
 REQUIRED_FILES = [
-    "onnx/model_q4f16.onnx",
-    "onnx/model_q4f16.onnx_data",
+    "onnx/model_int8.onnx",
     "tokenizer.json",
     "tokenizer_config.json",
     "config.json",
     "special_tokens_map.json",
 ]
 
-DEFAULT_MODEL_DIR = Path.home() / ".cache" / "qmd" / "models" / "embeddinggemma-300m"
+DEFAULT_MODEL_DIR = Path.home() / ".cache" / "qmd" / "models" / "jina-embeddings-v2-base-zh"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -55,7 +54,7 @@ def _file_info(path: Path) -> str:
 
 
 def check_model(model_dir: Path) -> dict:
-    """检测 Q4F16 模型文件完整性。"""
+    """检测 INT8 模型文件完整性。"""
     results = {"complete": True, "files": {}}
     for rel_path in REQUIRED_FILES:
         full_path = model_dir / rel_path
@@ -69,7 +68,8 @@ def check_model(model_dir: Path) -> dict:
 
 def print_check_result(model_dir: Path, result: dict) -> None:
     print(f"模型目录 : {model_dir}")
-    print(f"变体     : Q4F16 (~176 MB, CUDA GPU)")
+    print(f"来源仓库 : {REPO_ID}")
+    print(f"变体     : INT8 ONNX (~161 MB, 768d, 中英文)")
     print()
     print(f"{'文件':<45} {'状态':<8} {'大小'}")
     print("-" * 70)
@@ -94,7 +94,7 @@ def download_model(model_dir: Path = None, force: bool = False) -> bool:
     model_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("  EmbeddingGemma-300M Q4F16 ONNX 下载器")
+    print("  Jina Embeddings v2 Base ZH INT8 ONNX 下载器")
     print("=" * 60)
     print(f"来源仓库 : {REPO_ID}")
     print(f"目标目录 : {model_dir}")
@@ -126,7 +126,7 @@ def download_model(model_dir: Path = None, force: bool = False) -> bool:
     for f in REQUIRED_FILES:
         print(f"  - {f}")
     print()
-    print("⏳ 开始下载（model_q4f16.onnx_data 约 176 MB，请耐心等待）...")
+    print("⏳ 开始下载（model_int8.onnx 约 161 MB，请耐心等待）...")
     print()
 
     try:
@@ -164,24 +164,26 @@ def download_model(model_dir: Path = None, force: bool = False) -> bool:
         from fastembed.text.text_embedding import TextEmbedding
         from fastembed.common.model_description import PoolingType, ModelSource
 
-        TextEmbedding.add_custom_model(
-            model=MODEL_NAME,
-            pooling=PoolingType.MEAN,
-            normalization=True,
-            sources=ModelSource(hf=REPO_ID),
-            dim=768,
-            model_file="onnx/model_q4f16.onnx",
-            additional_files=["onnx/model_q4f16.onnx_data"],
-            description="EmbeddingGemma-300M Q4F16 ONNX, 768d",
-            size_in_gb=0.18,
-        )
-        # 不指定 cache_dir，让 fastembed 管理自己的缓存（~/.cache/fastembed/）
-        # 首次加载时 fastembed 会将文件复制到其缓存目录，后续直接复用
+        try:
+            TextEmbedding.add_custom_model(
+                model=MODEL_NAME,
+                pooling=PoolingType.MEAN,
+                normalization=True,
+                sources=ModelSource(hf=REPO_ID),
+                dim=768,
+                model_file="onnx/model_int8.onnx",
+                description="Jina Embeddings v2 Base ZH, INT8 ONNX, 768d, Chinese+English",
+                size_in_gb=0.16,
+            )
+        except ValueError as ve:
+            if "already registered" not in str(ve):
+                raise
+
         model = TextEmbedding(
             model_name=MODEL_NAME,
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
-        embedding = list(model.embed(["title: none | text: Hello!"]))[0]
+        embedding = list(model.embed(["Hello! 你好世界。"]))[0]
         assert len(embedding) == 768, f"维度错误：{len(embedding)}"
         print(f"✅ 推理验证通过！维度：{len(embedding)}d")
     except ImportError:
@@ -195,8 +197,8 @@ def download_model(model_dir: Path = None, force: bool = False) -> bool:
     print("=" * 60)
     print()
     print("后续步骤：")
-    print("  qmd server   # 启动嵌入服务（自动使用 CUDA）")
-    print("  qmd embed    # 为文档生成嵌入")
+    print("  qmd server   # 启动嵌入服务")
+    print("  qmd embed    # 为文档生成嵌入（768d）")
     print()
     return True
 
@@ -209,7 +211,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="下载 EmbeddingGemma-300M Q4F16 ONNX 模型（CUDA GPU 版本）",
+        description="下载 Jina Embeddings v2 Base ZH INT8 ONNX 模型（中英文，768d）",
     )
     parser.add_argument("--check",     action="store_true", help="只检测，不下载")
     parser.add_argument("--force",     action="store_true", help="强制重新下载")

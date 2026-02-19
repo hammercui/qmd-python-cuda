@@ -10,6 +10,7 @@ from .search.rerank import LLMReranker
 from .models.config import AppConfig, CollectionConfig
 from .models.downloader import ModelDownloader
 import os
+import subprocess
 import sys
 
 console = Console()
@@ -38,6 +39,17 @@ class Context:
     def __init__(self):
         self.config = AppConfig.load()
         self.db = DatabaseManager(self.config.db_path)
+
+
+def _index_collection(col: CollectionConfig, db: DatabaseManager) -> int:
+    """Scan and upsert all documents for a single collection. Returns indexed count."""
+    crawler = Crawler(col.path, col.glob_pattern)
+    count = 0
+    for rel_path, content, doc_hash, title in crawler.scan():
+        context_text = db.get_context_for_path(col.name, rel_path)
+        db.upsert_document(col.name, rel_path, doc_hash, title, content, context=context_text)
+        count += 1
+    return count
 
 
 @click.group()
@@ -201,7 +213,7 @@ def collection():
 @click.option("--glob", default="**/*.md", help="Glob pattern (default: **/*.md)")
 @click.pass_obj
 def collection_add(ctx_obj, path, name, glob):
-    """Add a new collection"""
+    """Add a new collection and immediately index it"""
     abs_path = os.path.abspath(path)
     if not os.path.exists(abs_path):
         console.print(f"[red]Error:[/red] Path {abs_path} does not exist")
@@ -212,12 +224,31 @@ def collection_add(ctx_obj, path, name, glob):
         console.print(f"[red]Error:[/red] Collection with name '{name}' already exists")
         return
 
+    # Check if same path+glob already registered
+    for c in ctx_obj.config.collections:
+        if c.path == abs_path and c.glob_pattern == glob:
+            console.print(
+                f"[yellow]A collection already exists for this path and pattern:[/yellow]\n"
+                f"  Name: {c.name} (qmd://{c.name}/)\n"
+                f"  Pattern: {glob}\n"
+                f"\nUse '[bold]qmd update[/bold]' to re-index it, or remove it first with "
+                f"'[bold]qmd collection remove {c.name}[/bold]'"
+            )
+            return
+
     try:
         new_col = CollectionConfig(name=name, path=abs_path, glob_pattern=glob)
         ctx_obj.config.collections.append(new_col)
         ctx_obj.config.save()
         ctx_obj.db.add_collection(name, abs_path, glob)
         console.print(f"[green]Added collection:[/green] {name} -> {abs_path}")
+
+        # Auto-index immediately (mirrors TS collectionAdd behaviour)
+        console.print(f"Indexing [cyan]{name}[/cyan]...")
+        count = _index_collection(new_col, ctx_obj.db)
+        console.print(f"  Indexed [green]{count}[/green] documents")
+        if count > 0:
+            console.print(f"[dim]Tip: Run 'qmd embed' to generate vector embeddings.[/dim]")
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
 
@@ -299,15 +330,7 @@ def index(ctx_obj):
     total_indexed = 0
     for col in ctx_obj.config.collections:
         console.print(f"Indexing collection: [cyan]{col.name}[/cyan]...")
-        crawler = Crawler(col.path, col.glob_pattern)
-        count = 0
-        for rel_path, content, doc_hash, title in crawler.scan():
-            # Get path context
-            context_text = ctx_obj.db.get_context_for_path(col.name, rel_path)
-            ctx_obj.db.upsert_document(
-                col.name, rel_path, doc_hash, title, content, context=context_text
-            )
-            count += 1
+        count = _index_collection(col, ctx_obj.db)
         console.print(f"  Indexed [green]{count}[/green] documents")
         total_indexed += count
 
@@ -402,23 +425,61 @@ def ls(ctx_obj, path_query):
 @click.option("--pull", is_flag=True, help="Run 'git pull' before indexing")
 @click.pass_obj
 def update(ctx_obj, pull):
-    """Update all collections (re-scan)"""
-    if pull:
-        import subprocess
+    """Update all collections (re-scan, run update hooks)"""
+    if not ctx_obj.config.collections:
+        console.print("[yellow]No collections to update.[/yellow]")
+        return
 
-        for col in ctx_obj.config.collections:
-            if os.path.exists(os.path.join(col.path, ".git")):
-                console.print(f"Pulling [cyan]{col.name}[/cyan]...")
-                try:
-                    subprocess.run(["git", "pull"], cwd=col.path, check=True)
-                except Exception as e:
-                    console.print(f"[red]Git pull failed for {col.name}: {e}[/red]")
+    total_indexed = 0
+    n = len(ctx_obj.config.collections)
+    for i, col in enumerate(ctx_obj.config.collections, 1):
+        console.print(
+            f"[cyan][{i}/{n}][/cyan] [bold]{col.name}[/bold] "
+            f"[dim]({col.glob_pattern})[/dim]"
+        )
 
-    # Call index logic with correct parameters
-    from click import get_current_context
+        # Determine update command:
+        # 1. Use col.update from config if set
+        # 2. Fall back to git pull when --pull flag given and repo is detected
+        update_cmd = col.update
+        if not update_cmd and pull and os.path.exists(os.path.join(col.path, ".git")):
+            update_cmd = "git pull"
 
-    ctx = get_current_context()
-    ctx.invoke(index)
+        if update_cmd:
+            console.print(f"  [dim]Running: {update_cmd}[/dim]")
+            try:
+                result = subprocess.run(
+                    update_cmd,
+                    shell=True,
+                    cwd=col.path,
+                    capture_output=True,
+                    text=True,
+                )
+                for line in result.stdout.strip().splitlines():
+                    console.print(f"  {line}")
+                for line in result.stderr.strip().splitlines():
+                    console.print(f"  [dim]{line}[/dim]")
+                if result.returncode != 0:
+                    console.print(
+                        f"  [red]Command exited with code {result.returncode}[/red]"
+                    )
+            except Exception as e:
+                console.print(f"  [red]Update command failed: {e}[/red]")
+
+        count = _index_collection(col, ctx_obj.db)
+        console.print(f"  Indexed [green]{count}[/green] documents")
+        total_indexed += count
+        console.print("")
+
+    console.print(f"[bold green]Total indexed:[/bold green] {total_indexed} documents")
+
+    # Show embedding hint (mirrors TS updateCollections)
+    needs_embed = ctx_obj.db.count_hashes_needing_embedding()
+    if needs_embed > 0:
+        console.print(
+            f"\nRun '[bold]qmd embed[/bold]' to update embeddings "
+            f"({needs_embed} unique hashes need vectors)"
+        )
 
 
 @cli.command()
@@ -608,7 +669,14 @@ def status(ctx_obj):
             col_table.add_row(col, str(count))
         console.print(col_table)
 
-    if total > 0:
+    # Warn about orphaned content (content table has data but documents table is empty)
+    orphaned = stats.get("orphaned_content", 0)
+    if orphaned > 0 and stats["documents"] == 0:
+        console.print(
+            f"[bold red]Error:[/bold red] {orphaned} content entries exist but no documents are indexed. "
+            f"Run '[bold]qmd index[/bold]' to rebuild the document index."
+        )
+    elif total > 0:
         missing = total - embedded
         if missing > 0:
             if missing / total > 0.1:

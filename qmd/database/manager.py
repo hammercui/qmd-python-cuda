@@ -159,11 +159,29 @@ class DatabaseManager:
                 os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
             )
 
-            # Embedded docs count (count distinct document hashes in content_vectors)
-            embedded_count = conn.execute(
-                "SELECT count(DISTINCT hash) FROM content_vectors"
+            # Count unique hashes from active documents (consistent with what `embed` processes)
+            total_content = conn.execute(
+                "SELECT count(DISTINCT hash) FROM documents WHERE active = 1"
             ).fetchone()[0]
-            total_content = conn.execute("SELECT count(*) FROM content").fetchone()[0]
+
+            # Embedded count limited to active document hashes
+            embedded_count = conn.execute(
+                """
+                SELECT count(DISTINCT cv.hash)
+                FROM content_vectors cv
+                WHERE cv.hash IN (SELECT DISTINCT hash FROM documents WHERE active = 1)
+                """
+            ).fetchone()[0]
+
+            # Orphaned content: rows in content with no active document reference
+            orphaned_content = conn.execute(
+                """
+                SELECT count(*) FROM content c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM documents d WHERE d.hash = c.hash AND d.active = 1
+                )
+                """
+            ).fetchone()[0]
 
             # Collection stats
             cursor = conn.execute(
@@ -181,6 +199,7 @@ class DatabaseManager:
                     "db_size": db_size,
                     "embedded_contents": embedded_count,
                     "total_contents": total_content,
+                    "orphaned_content": orphaned_content,
                     "collection_details": col_stats,
                     "last_index_update": last_mod,
                 }
@@ -410,6 +429,18 @@ class DatabaseManager:
 
             cursor = conn.execute(sql)
             return [row["hash"] for row in cursor.fetchall()]
+
+    def count_hashes_needing_embedding(self) -> int:
+        """Count distinct active document hashes that have no embedding yet."""
+        with self._get_connection() as conn:
+            return conn.execute(
+                """
+                SELECT count(DISTINCT d.hash)
+                FROM documents d
+                LEFT JOIN content_vectors cv ON d.hash = cv.hash
+                WHERE d.active = 1 AND cv.hash IS NULL
+                """
+            ).fetchone()[0]
 
     def get_chunks_for_hash(self, doc_hash: str) -> List[Dict[str, Any]]:
         """

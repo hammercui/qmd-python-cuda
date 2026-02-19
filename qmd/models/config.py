@@ -14,6 +14,7 @@ class CollectionConfig(BaseModel):
     name: str
     path: str
     glob_pattern: str = "**/*.md"
+    update: Optional[str] = None  # Optional shell command to run before re-indexing (e.g. "git pull")
 
 class AppConfig(BaseModel):
     db_path: str = Field(default_factory=lambda: str(get_default_config_dir() / "qmd.db"))
