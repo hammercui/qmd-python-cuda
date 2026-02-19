@@ -79,18 +79,26 @@ class LLMReranker:
                 onnx_path = str(Path(model_path) / "model.onnx")
                 print(f"[Reranker] Loading from: {onnx_path} (provider: {provider})")
                 self._tokenizer = AutoTokenizer.from_pretrained(model_path)
-                # int8-quantized ONNX models run on CPU SIMD (VNNI/AVX512).
-                # CUDA EP fallbacks for quantized ops cause extreme CPU<->GPU copy overhead,
-                # making it far slower than pure CPUExecutionProvider.
-                # Force CPUExecutionProvider regardless of device.
+                # seq-cls FP32: all ops natively supported by CUDAExecutionProvider,
+                # no int8 fallback overhead. Use CUDA directly.
                 try:
                     self._model = ort.InferenceSession(
                         onnx_path,
-                        providers=["CPUExecutionProvider"],
+                        providers=[provider, "CPUExecutionProvider"],
                     )
+                    inp_names = [i.name for i in self._model.get_inputs()]
+                    out_shapes = [(o.name, o.shape) for o in self._model.get_outputs()]
                     print(f"[Reranker] ORT session OK, providers: {self._model.get_providers()}")
+                    print(f"[Reranker] inputs: {inp_names}")
+                    print(f"[Reranker] outputs: {out_shapes}")
                 except Exception as cuda_err:
-                    raise
+                    if provider == "CUDAExecutionProvider":
+                        print(f"[Reranker] CUDA load failed ({cuda_err}), retrying CPU...")
+                        self._model = ort.InferenceSession(
+                            onnx_path, providers=["CPUExecutionProvider"]
+                        )
+                    else:
+                        raise
             except Exception as e:
                 print(f"Warning: Failed to load reranker model: {type(e).__name__}: {e}")
         return self._model
@@ -285,10 +293,6 @@ class LLMReranker:
         # Use content if available, otherwise title
         try:
             import numpy as np
-            import math
-            # Qwen3-Reranker: causal LM, score = P(yes) via softmax over yes/no logits
-            YES_TOKEN_ID = 9693
-            NO_TOKEN_ID = 2152
 
             SYSTEM_PROMPT = (
                 'Judge whether the Document meets the requirements based on the Query '
@@ -306,40 +310,39 @@ class LLMReranker:
                 ) + "<think>\n\n</think>\n\n"
 
             ort_session = self._model
+            input_names = {inp.name for inp in ort_session.get_inputs()}
             print(f"[Reranker] providers active: {ort_session.get_providers()}, docs={len(documents)}")
-            batch_scores = []
             _t0 = time.perf_counter()
-            for query_text, doc_text in [[query, doc.get("content", doc.get("title", ""))] for doc in documents]:
-                # Truncate doc content: shorter seq → much smaller logits output
-                doc_text = doc_text[:300]
-                prompt = _make_input(query_text, doc_text)
-                enc = self._tokenizer(
-                    prompt, return_tensors="np", truncation=True, max_length=128
-                )
-                seq = enc["input_ids"].shape[1]
-                pos_ids = np.arange(seq, dtype=np.int64).reshape(1, seq)
-                outs = ort_session.run(
-                    None,
-                    {
-                        "input_ids": enc["input_ids"],
-                        "attention_mask": enc["attention_mask"],
-                        "position_ids": pos_ids,
-                    },
-                )
-                last_logits = outs[0][0, -1, :]  # (vocab,)
-                yes_logit = float(last_logits[YES_TOKEN_ID])
-                no_logit = float(last_logits[NO_TOKEN_ID])
-                # Softmax over yes/no: P(yes)
-                exp_yes = math.exp(yes_logit - max(yes_logit, no_logit))
-                exp_no  = math.exp(no_logit  - max(yes_logit, no_logit))
-                score = exp_yes / (exp_yes + exp_no)
-                batch_scores.append(score)
+
+            # Build prompts for all docs at once
+            doc_texts = [doc.get("content", doc.get("title", ""))[:300] for doc in documents]
+            prompts = [_make_input(query, t) for t in doc_texts]
+
+            # Tokenize as a batch with padding
+            enc = self._tokenizer(
+                prompts, padding=True, truncation=True,
+                return_tensors="np", max_length=512
+            )
+
+            # Build ORT inputs - auto-detect which inputs the model requires
+            ort_inputs = {
+                "input_ids": enc["input_ids"],
+                "attention_mask": enc["attention_mask"],
+            }
+            if "position_ids" in input_names:
+                batch, seq = enc["input_ids"].shape
+                ort_inputs["position_ids"] = np.broadcast_to(
+                    np.arange(seq, dtype=np.int64), (batch, seq)
+                ).copy()
+
+            # Single batch forward → (batch, 1) or (batch, num_labels)
+            outs = ort_session.run(None, ort_inputs)
+            scores = outs[0].squeeze(-1).flatten()  # (batch,)
 
             print(f"[Reranker] {len(documents)} docs scored in {time.perf_counter()-_t0:.2f}s")
             for i, doc in enumerate(documents):
-                doc["rerank_score"] = batch_scores[i]
+                doc["rerank_score"] = float(scores[i])
 
-            # Sort by rerank_score
             reranked = sorted(
                 documents, key=lambda x: x.get("rerank_score", 0), reverse=True
             )

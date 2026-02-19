@@ -81,11 +81,11 @@ class ModelDownloader:
             "dim": 768,                                        # 向量维度 Jina v2 ZH
         },
         "reranker": {
-            "hf": "thomasht86/Qwen3-Reranker-0.6B-int8-ONNX",
-            "ms": "thomasht86/Qwen3-Reranker-0.6B-int8-ONNX",
-            "size_mb": 600,
-            "type": "onnx-reranker",
-            "model_file": "model.onnx",                       # 根目录，无 onnx/ 子目录
+            "hf": "zhiqing/Qwen3-Reranker-0.6B-seq-cls-ONNX",
+            "ms": "zhiqing/Qwen3-Reranker-0.6B-seq-cls-ONNX",
+            "size_mb": 1138,
+            "type": "onnx-seq-cls",
+            "model_file": "model.onnx",  # FP32 Sequence Classification, CUDA-native
         },
         "expansion": {
             "hf": "onnx-community/Qwen3-0.6B-ONNX",
