@@ -68,3 +68,9 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     reranker_loaded: bool = False
     queue_size: int = 0
+
+
+class EmbedIndexRequest(BaseModel):
+    """Request model for server-side index embedding job."""
+    collection: Optional[str] = None
+    force: bool = False

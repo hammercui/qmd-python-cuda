@@ -705,163 +705,95 @@ def status(ctx_obj):
 @click.option(
     "--force", is_flag=True, help="Clear all existing embeddings and re-embed"
 )
-@click.option(
-    "--mode",
-    default="auto",
-    type=click.Choice(["auto", "standalone", "server"]),
-    help="Embedding mode: auto (default), standalone (local model), server (MCP server)",
-)
 @click.pass_obj
-def embed(ctx_obj, collection, force, mode):
-    """Generate embeddings for indexed documents using Jina ZH (768d)"""
-    from qmd.llm.engine import LLMEngine
-    from qmd.utils.chunker import chunk_document, embedding_to_bytes
-    from datetime import datetime
+def embed(ctx_obj, collection, force):
+    """Generate embeddings for indexed documents via server (Jina ZH 768d).
 
-    # Initialize LLM engine
-    llm = LLMEngine(mode=mode)
-
-    # Get documents to embed
-    docs = ctx_obj.db.get_all_active_documents()
-
-    if collection:
-        docs = [d for d in docs if d["collection"] == collection]
-
-    if not docs:
-        console.print("[yellow]No documents to embed.[/yellow]")
-        return
-
-    # Force mode: clear all embeddings first
-    if force:
-        console.print(
-            "[yellow]Force mode: clearing all existing embeddings...[/yellow]"
-        )
-        ctx_obj.db.clear_all_embeddings()
-
-    # Ensure vectors_vec table exists (768 dimensions for Jina ZH)
-    ctx_obj.db.ensure_vec_table(dimensions=768)
-
-    console.print(
-        f"Embedding [cyan]{len(docs)}[/cyan] documents with Jina ZH (768d)..."
+    The server reads the database, chunks documents, runs GPU embedding, and
+    writes vectors back.  A second invocation while a job is running attaches
+    to the running job instead of starting a new one.
+    """
+    from rich.progress import (
+        Progress,
+        BarColumn,
+        TaskProgressColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+        TextColumn,
     )
+    from qmd.server.client import EmbedServerClient
 
-    from collections import defaultdict
-    import time
-    from rich.progress import Progress
+    client = EmbedServerClient()
 
-    by_col = defaultdict(list)
-    for d in docs:
-        # Check if already embedded (unless force mode)
-        if not force:
-            chunks = ctx_obj.db.get_chunks_for_hash(d["hash"])
-            if chunks:
-                # Already embedded, skip
-                by_col[d["collection"]].append(
-                    {
-                        "id": f"{d['collection']}:{d['path']}",
-                        "hash": d["hash"],
-                        "embedded": True,
-                    }
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[dim]Connecting to server…[/dim]", total=None)
+
+        def on_progress(event: dict) -> None:
+            status = event.get("status")
+            total = event.get("total_chunks", 0)
+            done = event.get("done_chunks", 0)
+            done_docs = event.get("done_docs", 0)
+            total_docs = event.get("total_docs", 0)
+
+            if event.get("_attached"):
+                progress.print("[dim]Attaching to running embed job…[/dim]")
+
+            if status == "error":
+                progress.print(
+                    f"[red]Embed error:[/red] {event.get('error', 'unknown')}"
                 )
-                continue
+                return
 
-        by_col[d["collection"]].append(
-            {
-                "id": f"{d['collection']}:{d['path']}",
-                "hash": d["hash"],
-                "content": d["content"],
-                "embedded": False,
-            }
-        )
-
-    # Pre-collect all chunks per collection to get accurate chunk count for the
-    # progress bar. chunk_document is pure string ops (fast), pre-pass is cheap.
-    col_chunks: dict = {}  # col_name -> [{hash, seq, pos, text}]
-    total_chunks_all = 0
-    for col_name, col_docs in by_col.items():
-        to_embed_pre = [doc for doc in col_docs if not doc["embedded"]]
-        chunks_for_col = []
-        for doc in to_embed_pre:
-            for chunk in chunk_document(doc["content"]):
-                chunks_for_col.append(
-                    {
-                        "hash": doc["hash"],
-                        "seq": chunk["seq"],
-                        "pos": chunk["pos"],
-                        "text": chunk["text"],
-                    }
+            if status == "running":
+                progress.update(
+                    task,
+                    total=total or None,
+                    completed=done,
+                    description=(
+                        f"[cyan]{done_docs}/{total_docs} docs[/cyan]"
+                        if total_docs
+                        else "[cyan]Embedding…[/cyan]"
+                    ),
                 )
-        col_chunks[col_name] = chunks_for_col
-        total_chunks_all += len(chunks_for_col)
 
-    if total_chunks_all == 0:
-        console.print(
-            "[green]All documents already embedded. Use --force to re-embed.[/green]"
-        )
-        return
-
-    # Chunks per HTTP request to the server.
-    # Server holds the processing lock for exactly EMBED_BATCH / GPU_EMBED_BATCH_SIZE
-    # GPU micro-batches, keeping each lock acquisition to ~2-5 seconds.
-    EMBED_BATCH = 32
-
-    with Progress() as progress:
-        task = progress.add_task("[cyan]Embedding...[/cyan]", total=total_chunks_all)
-
-        for col_name, col_docs in by_col.items():
-            cached = [doc for doc in col_docs if doc["embedded"]]
-            all_chunks = col_chunks.get(col_name, [])
-
-            console.print(
-                f"  Processing collection: [cyan]{col_name}[/cyan]"
-                f" ({len(col_docs)} docs, {len(all_chunks)} chunks)"
-            )
-
-            if all_chunks:
-                start = time.time()
-                done_in_col = 0
-
-                for i in range(0, len(all_chunks), EMBED_BATCH):
-                    batch = all_chunks[i : i + EMBED_BATCH]
-                    texts = [c["text"] for c in batch]
-
-                    embeddings = llm.embed_texts(texts)
-
-                    # Insert immediately after each batch — no need to hold
-                    # all embeddings in memory until collection is done
-                    now = datetime.now().isoformat()
-                    for chunk, embedding in zip(batch, embeddings):
-                        ctx_obj.db.insert_embedding(
-                            doc_hash=chunk["hash"],
-                            seq=chunk["seq"],
-                            pos=chunk["pos"],
-                            embedding=embedding_to_bytes(embedding),
-                            model="jinaai/jina-embeddings-v2-base-zh-q4f16",
-                            embedded_at=now,
-                        )
-
-                    done_in_col += len(batch)
-                    elapsed = time.time() - start
-                    rate = done_in_col / elapsed if elapsed > 0 else 0
-                    done_total = progress.tasks[task].completed + len(batch)
-                    eta = int((total_chunks_all - done_total) / rate) if rate > 0 else 0
-
-                    progress.advance(task, len(batch))
-                    progress.update(
-                        task,
-                        description=(
-                            f"[cyan]{col_name}[/cyan]"
-                            f" {done_in_col}/{len(all_chunks)} chunks"
-                            + (f", {eta}s left" if eta > 0 else "")
-                        ),
+            elif status == "complete":
+                progress.update(
+                    task,
+                    total=max(total, 1),
+                    completed=max(total, 1),
+                    description=(
+                        f"[green]Complete — {done_docs} docs, {done} chunks[/green]"
+                    ),
+                )
+                if done == 0:
+                    progress.print(
+                        "[green]All documents already embedded.[/green]"
+                        " Use [bold]--force[/bold] to re-embed."
+                    )
+                else:
+                    progress.print(
+                        f"[bold green]Embedding complete![/bold green]"
+                        f" {done} chunks across {done_docs} docs"
                     )
 
-            if cached:
-                console.print(
-                    f"    Using cached embeddings for {len(cached)} documents"
-                )
-
-    console.print("[bold green]Embedding complete![/bold green]")
+        try:
+            client.embed_index(
+                collection=collection,
+                force=force,
+                on_progress=on_progress,
+            )
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            console.print(
+                "[dim]Tip: ensure the server is running with [bold]qmd server[/bold][/dim]"
+            )
 
 
 @cli.command()

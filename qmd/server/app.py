@@ -7,10 +7,14 @@ shared singleton services so every CLI client just makes HTTP requests.
 """
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from rich.console import Console as _RichConsole
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from starlette.types import ASGIApp
 import asyncio
+import dataclasses
+import json as _json
 import math
 import time
 from typing import List, Optional
@@ -70,6 +74,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 from qmd.server.models import (
     EmbedRequest,
     EmbedResponse,
+    EmbedIndexRequest,
     VSearchRequest,
     VSearchResponse,
     QueryRequest,
@@ -88,6 +93,7 @@ from qmd.llm.engine import (
 )
 
 logger = logging.getLogger(__name__)
+_srv_console = _RichConsole(stderr=False)  # 服务端进度输出到 stdout
 
 # Global singletons
 _model = None
@@ -99,6 +105,191 @@ _hybrid_search = None
 
 # Model configuration
 DEFAULT_MODEL = "jinaai/jina-embeddings-v2-base-zh-q4f16"  # Jina v2 ZH INT8 ONNX (Xenova), 768d
+
+# ---------------------------------------------------------------------------
+# Server-side embedding job state
+# Only one embed job runs at a time; multiple CLI clients can attach via SSE.
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class _EmbedJobState:
+    running: bool = False
+    collection: Optional[str] = None
+    force: bool = False
+    total_chunks: int = 0
+    done_chunks: int = 0
+    total_docs: int = 0
+    done_docs: int = 0
+    error: Optional[str] = None
+    finished: bool = False
+    _queues: list = dataclasses.field(default_factory=list)
+
+_embed_job: _EmbedJobState = _EmbedJobState()
+_embed_job_lock: Optional[asyncio.Lock] = None  # initialized in startup_event
+
+
+async def _embed_worker() -> None:
+    """Run the full embed pipeline server-side and broadcast SSE progress events.
+
+    Reads documents from the DB, chunks them, runs GPU embedding, writes vectors
+    back to the DB, and broadcasts incremental progress to all subscribed SSE
+    clients via asyncio.Queue.  Runs as a background asyncio.Task.
+    """
+    global _embed_job
+
+    async def broadcast(event: dict) -> None:
+        data = _json.dumps(event)
+        for q in list(_embed_job._queues):
+            try:
+                await q.put(data)
+            except Exception:
+                pass
+
+    loop = asyncio.get_running_loop()
+
+    try:
+        from qmd.database.manager import DatabaseManager
+        from qmd.utils.chunker import chunk_document, embedding_to_bytes
+        from datetime import datetime
+
+        db = DatabaseManager(_config.db_path)
+        db.ensure_vec_table(dimensions=768)
+
+        docs = db.get_all_active_documents()
+        if _embed_job.collection:
+            docs = [d for d in docs if d["collection"] == _embed_job.collection]
+
+        if _embed_job.force:
+            db.clear_all_embeddings()
+            needs_embed_set = {d["hash"] for d in docs}
+        else:
+            needs_embed_set = set(db.get_hashes_for_embedding())
+
+        to_embed = [d for d in docs if d["hash"] in needs_embed_set]
+
+        # Pre-chunk to get accurate total_chunks for progress bar
+        all_chunks: list = []
+        for doc in to_embed:
+            for chunk in chunk_document(doc["content"]):
+                all_chunks.append({
+                    "hash": doc["hash"],
+                    "seq": chunk["seq"],
+                    "pos": chunk["pos"],
+                    "text": chunk["text"],
+                })
+
+        _embed_job.total_docs = len(to_embed)
+        _embed_job.total_chunks = len(all_chunks)
+
+        if not all_chunks:
+            _srv_console.print(
+                f"[green]\u2713 Embed:[/green] all {len(docs)} docs already embedded"
+            )
+            await broadcast({
+                "status": "complete",
+                "done_chunks": 0, "total_chunks": 0,
+                "done_docs": 0, "total_docs": len(docs),
+            })
+            return
+
+        col_label = f" [{_embed_job.collection}]" if _embed_job.collection else ""
+        _srv_console.print(
+            f"[cyan]\u25b6 Embed{col_label}:[/cyan]"
+            f" {len(to_embed)} docs, {len(all_chunks)} chunks"
+        )
+
+        await broadcast({
+            "status": "running",
+            "done_chunks": 0,
+            "total_chunks": _embed_job.total_chunks,
+            "done_docs": 0,
+            "total_docs": _embed_job.total_docs,
+        })
+
+        done_hashes: set = set()
+        now = datetime.now().isoformat()
+        _last_report_pct: int = -1  # track last reported 5%-milestone
+        _t0 = asyncio.get_event_loop().time()
+
+        for i in range(0, len(all_chunks), GPU_EMBED_BATCH_SIZE):
+            batch = all_chunks[i: i + GPU_EMBED_BATCH_SIZE]
+            texts = [c["text"] for c in batch]
+
+            # Run model inference in thread-pool executor to avoid blocking
+            # the uvicorn event loop while the GPU is busy.
+            raw_embeddings = await loop.run_in_executor(
+                None,
+                lambda t=texts: list(_model.embed(t)),
+            )
+
+            for chunk, emb in zip(batch, raw_embeddings):
+                db.insert_embedding(
+                    doc_hash=chunk["hash"],
+                    seq=chunk["seq"],
+                    pos=chunk["pos"],
+                    embedding=embedding_to_bytes(emb.tolist()),
+                    model="jinaai/jina-embeddings-v2-base-zh-q4f16",
+                    embedded_at=now,
+                )
+                done_hashes.add(chunk["hash"])
+
+            _embed_job.done_chunks += len(batch)
+            _embed_job.done_docs = len(done_hashes)
+
+            # Print server-side progress every 5% milestone
+            _total = _embed_job.total_chunks
+            _pct = int(_embed_job.done_chunks * 100 / _total) if _total else 100
+            _milestone = (_pct // 5) * 5
+            if _milestone > _last_report_pct:
+                _last_report_pct = _milestone
+                _elapsed = asyncio.get_event_loop().time() - _t0
+                _rate = _embed_job.done_chunks / _elapsed if _elapsed > 0 else 0
+                _eta = int((_total - _embed_job.done_chunks) / _rate) if _rate > 0 else 0
+                _bar_filled = _milestone // 5  # 0-20 blocks
+                _bar = "\u2588" * _bar_filled + "\u2591" * (20 - _bar_filled)
+                _eta_str = f"  ETA {_eta}s" if _eta > 0 else ""
+                _srv_console.print(
+                    f"  [dim]{_bar}[/dim] {_pct:3d}%"
+                    f"  {_embed_job.done_chunks}/{_total} chunks"
+                    f"  {_embed_job.done_docs}/{_embed_job.total_docs} docs"
+                    f"{_eta_str}"
+                )
+
+            await broadcast({
+                "status": "running",
+                "done_chunks": _embed_job.done_chunks,
+                "total_chunks": _embed_job.total_chunks,
+                "done_docs": _embed_job.done_docs,
+                "total_docs": _embed_job.total_docs,
+            })
+
+        _elapsed_total = asyncio.get_event_loop().time() - _t0
+        _srv_console.print(
+            f"[bold green]\u2713 Embed complete:[/bold green]"
+            f" {_embed_job.done_chunks} chunks, {_embed_job.done_docs} docs"
+            f"  ({_elapsed_total:.1f}s)"
+        )
+        await broadcast({
+            "status": "complete",
+            "done_chunks": _embed_job.done_chunks,
+            "total_chunks": _embed_job.total_chunks,
+            "done_docs": _embed_job.done_docs,
+            "total_docs": _embed_job.total_docs,
+        })
+
+    except Exception as exc:
+        logger.error("Embed worker error: %s", exc, exc_info=True)
+        _srv_console.print(f"[red]\u2717 Embed error:[/red] {exc}")
+        _embed_job.error = str(exc)
+        await broadcast({"status": "error", "error": str(exc)})
+
+    finally:
+        _embed_job.running = False
+        _embed_job.finished = True
+        # Send sentinel so all SSE generators terminate cleanly
+        for q in list(_embed_job._queues):
+            await q.put(None)
+        _embed_job._queues.clear()
 
 
 def create_app() -> FastAPI:
@@ -137,10 +328,11 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup_event():
         """Initialize model and search engines on startup."""
-        global _model, _processing_lock, _config, _vector_search, _hybrid_search
+        global _model, _processing_lock, _config, _vector_search, _hybrid_search, _embed_job_lock
 
         try:
             _config = AppConfig.load()
+            _embed_job_lock = asyncio.Lock()
 
             if DEFAULT_MODEL == EMBEDDING_MODEL_NAME:
                 _register_jina_zh()
@@ -245,6 +437,8 @@ def create_app() -> FastAPI:
         """
         if _model is None:
             raise HTTPException(status_code=503, detail="Model not loaded")
+        if _embed_job.running:
+            raise HTTPException(status_code=503, detail="Index embedding job in progress. Use /embed/index to attach.")
         if not request.texts:
             raise HTTPException(status_code=400, detail="Empty texts list")
         try:
@@ -271,6 +465,8 @@ def create_app() -> FastAPI:
         """
         if _model is None:
             raise HTTPException(status_code=503, detail="Model not loaded")
+        if _embed_job.running:
+            raise HTTPException(status_code=503, detail="Index embedding job in progress. Use /embed/index to attach.")
         if not request.texts:
             raise HTTPException(status_code=400, detail="Empty texts list")
 
@@ -285,6 +481,65 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"Batch embedding error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/embed/index")
+    async def embed_index(request: EmbedIndexRequest):
+        """Server-side embedding: read DB → chunk → GPU embed → write DB, streamed as SSE.
+
+        Only one job runs at a time.  A second caller automatically attaches to
+        the running job and receives the current + future progress events.
+        """
+        global _embed_job, _embed_job_lock
+
+        if _model is None:
+            raise HTTPException(status_code=503, detail="Model not loaded")
+
+        q: asyncio.Queue = asyncio.Queue()
+        attached = False
+
+        async with _embed_job_lock:
+            if _embed_job.running:
+                # Attach to the running job — send current state immediately
+                attached = True
+                _embed_job._queues.append(q)
+                await q.put(_json.dumps({
+                    "status": "running",
+                    "done_chunks": _embed_job.done_chunks,
+                    "total_chunks": _embed_job.total_chunks,
+                    "done_docs": _embed_job.done_docs,
+                    "total_docs": _embed_job.total_docs,
+                    "_attached": True,
+                }))
+                logger.info("New client attached to running embed job")
+            else:
+                # Start a new job
+                _embed_job.running = True
+                _embed_job.finished = False
+                _embed_job.collection = request.collection
+                _embed_job.force = request.force
+                _embed_job.total_chunks = 0
+                _embed_job.done_chunks = 0
+                _embed_job.total_docs = 0
+                _embed_job.done_docs = 0
+                _embed_job.error = None
+                _embed_job._queues = [q]
+                asyncio.create_task(_embed_worker())
+                logger.info(
+                    "Started embed job: collection=%s force=%s",
+                    request.collection, request.force,
+                )
+
+        async def event_stream():
+            try:
+                while True:
+                    item = await q.get()
+                    if item is None:  # sentinel: job finished
+                        break
+                    yield f"data: {item}\n\n"
+            except asyncio.CancelledError:
+                pass  # client disconnected
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.post("/vsearch", response_model=VSearchResponse)
     async def vsearch(request: VSearchRequest):
@@ -496,7 +751,7 @@ def create_app() -> FastAPI:
 # GPU batch size for embedding inference.
 # Jina v2 ZH quantized (768d): a batch of 16 x 3200-char chunks uses ~200 MB VRAM.
 # Much lighter than BGE-M3; can be increased on higher-VRAM GPUs.
-GPU_EMBED_BATCH_SIZE = 16
+GPU_EMBED_BATCH_SIZE = 32
 
 
 async def process_embeddings(texts: List[str]) -> List[List[float]]:

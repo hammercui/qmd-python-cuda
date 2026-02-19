@@ -6,10 +6,11 @@ the embedding server with automatic service discovery.
 """
 
 import httpx
+import json as _json
 import subprocess
 import platform
 import time
-from typing import List, Optional
+from typing import Callable, List, Optional
 import logging
 
 from .port_manager import find_available_port, get_saved_port, DEFAULT_PORT
@@ -172,6 +173,55 @@ class EmbedServerClient:
         except Exception as e:
             logger.debug(f"Health check failed: {e}")
             return False
+
+    def embed_index(
+        self,
+        collection: Optional[str] = None,
+        force: bool = False,
+        on_progress: Optional[Callable[[dict], None]] = None,
+    ) -> None:
+        """Trigger server-side embedding job and stream progress via SSE.
+
+        If the server is already running an embed job, attaches to it so only
+        one job runs at a time.
+
+        Args:
+            collection: Collection name to embed (None = all collections).
+            force: If True, clear existing embeddings and re-embed everything.
+            on_progress: Called with each progress event dict from the server.
+                         Event keys: status, done_chunks, total_chunks,
+                         done_docs, total_docs, error (on error), _attached (bool).
+
+        Raises:
+            httpx.ConnectError: If the server is not running.
+            httpx.HTTPStatusError: If the server returns an HTTP error.
+        """
+        body: dict = {"force": force}
+        if collection:
+            body["collection"] = collection
+
+        # Infinite read timeout: embedding may take a long time
+        timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)
+
+        with httpx.stream(
+            "POST",
+            f"{self.base_url}/embed/index",
+            json=body,
+            timeout=timeout,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    event = _json.loads(line[5:].strip())
+                except Exception:
+                    continue
+                if on_progress:
+                    on_progress(event)
+                if event.get("status") in ("complete", "error"):
+                    break
 
     def embed_texts(self, texts: List[str]) -> Optional[List[List[float]]]:
         """

@@ -373,10 +373,15 @@ class DatabaseManager:
                 (doc_hash, seq, pos, model, embedded_at),
             )
 
-            # Insert vector
+            # Insert vector — vec0 virtual tables do NOT support INSERT OR REPLACE,
+            # so we must DELETE first then INSERT.
             hash_seq = f"{doc_hash}_{seq}"
             conn.execute(
-                "INSERT OR REPLACE INTO vectors_vec VALUES (?, ?)",
+                "DELETE FROM vectors_vec WHERE hash_seq = ?",
+                (hash_seq,),
+            )
+            conn.execute(
+                "INSERT INTO vectors_vec VALUES (?, ?)",
                 (hash_seq, embedding),
             )
 
