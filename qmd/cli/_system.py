@@ -101,7 +101,11 @@ def check(ctx_obj, download):
     try:
         import optimum
 
-        deps_status["optimum"] = ("✓", f"v{optimum.__version__}")
+        try:
+            optimum_version = optimum.__version__
+        except AttributeError:
+            optimum_version = "installed"
+        deps_status["optimum"] = ("✓", f"v{optimum_version}")
     except ImportError:
         deps_status["optimum"] = ("✗", "Not installed")
 

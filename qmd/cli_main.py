@@ -4,6 +4,14 @@ This module provides the main CLI entry point and imports all command groups
 from the modular cli subpackage.
 """
 
+import sys
+
+# Ensure stdout/stderr use UTF-8 on Windows (default is GBK which breaks emoji output)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import click
 
 from qmd.cli import check_virtual_env
