@@ -3,6 +3,7 @@ import os
 import re
 import sqlite_vec
 import logging
+import time
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from .schema import SCHEMA, FTS_SCHEMA, TRIGGERS
@@ -486,3 +487,126 @@ class DatabaseManager:
                 }
                 for chunk in chunks
             ]
+
+    # ========== Cleanup Methods ==========
+
+    def delete_inactive_documents(self) -> int:
+        """
+        Delete inactive documents and their FTS entries.
+
+        Returns:
+            Number of documents deleted
+        """
+        with self._get_connection() as conn:
+            # First, FTS entries will be auto-deleted by trigger
+            cursor = conn.execute("DELETE FROM documents WHERE active = 0")
+            deleted_count = cursor.rowcount
+            conn.commit()
+            return deleted_count
+
+    def cleanup_orphaned_vectors(self) -> int:
+        """
+        Remove vector entries for documents that are no longer active.
+
+        Returns:
+            Number of orphaned vectors removed
+        """
+        with self._get_connection() as conn:
+            # Delete from content_vectors where hash is not in active documents
+            cursor = conn.execute(
+                """
+                DELETE FROM content_vectors 
+                WHERE hash NOT IN (
+                    SELECT DISTINCT hash FROM documents WHERE active = 1
+                )
+                """
+            )
+            orphaned_count = cursor.rowcount
+
+            # Also clean up vectors_vec table
+            if orphaned_count > 0:
+                try:
+                    conn.execute(
+                        """
+                        DELETE FROM vectors_vec 
+                        WHERE hash_seq NOT IN (
+                            SELECT hash || '_' || seq FROM content_vectors
+                        )
+                        """
+                    )
+                except Exception:
+                    # vectors_vec might not exist or have different structure
+                    pass
+
+            conn.commit()
+            return orphaned_count
+
+    def cleanup_llm_cache(self) -> int:
+        """
+        Clear LLM cache table if it exists.
+
+        Returns:
+            Number of cache entries cleared (0 if table doesn't exist)
+        """
+        with self._get_connection() as conn:
+            try:
+                cursor = conn.execute("SELECT count(*) FROM llm_cache")
+                count = cursor.fetchone()[0]
+                conn.execute("DELETE FROM llm_cache")
+                conn.commit()
+                return count
+            except Exception:
+                # Table doesn't exist
+                return 0
+
+    def vacuum_database(self) -> None:
+        """
+        Run VACUUM to reclaim space and defragment database.
+        This should be called after major deletions.
+        """
+        with self._get_connection() as conn:
+            conn.execute("VACUUM")
+
+    def cleanup_all(self) -> Dict[str, Any]:
+        """
+        Run full cleanup: inactive docs, orphaned vectors, LLM cache, VACUUM.
+
+        Returns:
+            Dict with cleanup results
+        """
+        logger.info("Starting full database cleanup...")
+
+        results = {}
+
+        # Step 1: Delete inactive documents
+        t0 = time.time()
+        deleted_docs = self.delete_inactive_documents()
+        results["deleted_documents"] = deleted_docs
+        logger.info(
+            f"Deleted {deleted_docs} inactive documents ({time.time() - t0:.2f}s)"
+        )
+
+        # Step 2: Cleanup orphaned vectors
+        t0 = time.time()
+        orphaned_vectors = self.cleanup_orphaned_vectors()
+        results["orphaned_vectors"] = orphaned_vectors
+        logger.info(
+            f"Removed {orphaned_vectors} orphaned vectors ({time.time() - t0:.2f}s)"
+        )
+
+        # Step 3: Clear LLM cache
+        t0 = time.time()
+        cache_cleared = self.cleanup_llm_cache()
+        results["llm_cache_cleared"] = cache_cleared
+        if cache_cleared > 0:
+            logger.info(
+                f"Cleared {cache_cleared} LLM cache entries ({time.time() - t0:.2f}s)"
+            )
+
+        # Step 4: VACUUM database
+        t0 = time.time()
+        self.vacuum_database()
+        results["vacuum_time"] = time.time() - t0
+        logger.info(f"Database VACUUM completed ({results['vacuum_time']:.2f}s)")
+
+        return results

@@ -15,6 +15,7 @@ from qmd.cli._index import index, update
 from qmd.cli._search import search, vsearch, query
 from qmd.cli._doc import ls, get, multi_get
 from qmd.cli._embed import embed
+from qmd.cli._cleanup import cleanup
 from qmd.cli._system import status, check, download
 from qmd.cli import Context
 
@@ -42,6 +43,7 @@ cli.add_command(status)
 cli.add_command(embed)
 cli.add_command(vsearch)
 cli.add_command(query)
+cli.add_command(cleanup)
 cli.add_command(check)
 cli.add_command(download)
 

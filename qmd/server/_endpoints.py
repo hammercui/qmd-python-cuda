@@ -6,7 +6,7 @@ import logging
 import math
 import time
 from collections import defaultdict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -270,18 +270,87 @@ async def embed_index(request: EmbedIndexRequest):
 
 @router.post("/vsearch", response_model=VSearchResponse)
 async def vsearch(request: VSearchRequest):
-    """Vector semantic search. Searches all collections when collection is not specified."""
+    """
+    Vector semantic search with optional query expansion.
+
+    TS implementation:
+    - Uses expandQueryStructured with includeLexical=false (no lex variants)
+    - Only vec/hyde variants for vector search
+    - Takes best score across multiple queries for same doc
+    - Default min_score = 0.3
+    """
     if _state.model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     try:
         searcher = get_vector_search()
-        # collection=None → searches across ALL embedded collections
-        results = searcher.search(
-            request.query,
-            collection_name=request.collection or None,
-            limit=request.limit,
+
+        # Get all queries to search: original + expanded (vec/hyde only, no lex)
+        queries = [request.query]
+        min_score = request.min_score if request.min_score is not None else 0.3
+
+        # Try query expansion (without lex variants for vsearch)
+        try:
+            reranker = get_reranker()
+            loop = asyncio.get_event_loop()
+            expanded = await loop.run_in_executor(
+                None,
+                reranker.expand_query,
+                request.query,
+                False,  # include_lexical=False
+            )
+            # Only use vec and hyde variants for vector search
+            for v in expanded.get("vec", []) + expanded.get("hyde", []):
+                if v and v.strip():
+                    queries.append(v)
+            if len(queries) > 1:
+                logger.info(f"VSearch expansion: {len(queries)} queries")
+        except Exception as exp_err:
+            logger.warning(f"Query expansion failed in vsearch: {exp_err}")
+
+        # Search with all queries, collect best score per document
+        doc_best_score: Dict[str, float] = {}
+        doc_info: Dict[str, Dict] = {}
+
+        for q in queries:
+            results = searcher.search(
+                q,
+                collection_name=request.collection or None,
+                limit=request.limit * 2,  # Get more for dedup
+            )
+
+            for r in results:
+                doc_key = f"{r.collection}:{r.path}"
+                score = r.score
+
+                # Keep best score across all queries
+                if doc_key not in doc_best_score or score > doc_best_score[doc_key]:
+                    doc_best_score[doc_key] = score
+                    doc_info[doc_key] = {
+                        "filepath": r.filepath,
+                        "display_path": r.display_path,
+                        "title": r.title,
+                        "body": r.body,
+                        "score": score,
+                        "hash": r.hash,
+                        "collection": r.collection,
+                        "path": r.path,
+                    }
+
+        # Filter by min_score and convert to list
+        filtered_results = [
+            doc_info[k] for k, v in doc_best_score.items() if v >= min_score
+        ]
+
+        # Sort by score (best first) and limit
+        filtered_results.sort(key=lambda x: x["score"], reverse=True)
+        final_results = filtered_results[: request.limit]
+
+        logger.info(
+            f"VSearch: {len(queries)} queries, {len(doc_best_score)} candidates, "
+            f"{len(final_results)} results (min_score={min_score})"
         )
-        return VSearchResponse(results=[r.dict() for r in results])
+
+        return VSearchResponse(results=final_results)
     except Exception as e:
         logger.error(f"Vector search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -290,7 +359,8 @@ async def vsearch(request: VSearchRequest):
 @router.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
     """Full query pipeline (TS-equivalent):
-    LLM expansion → multi-query BM25+vector → weighted RRF → cross-encoder rerank → position-aware blend.
+    Strong signal detection → (optional LLM expansion) → multi-query BM25+vector →
+    weighted RRF with top-rank bonus → cross-encoder rerank → position-aware blend → dedup.
     Falls back gracefully to plain RRF if any step fails.
     """
     if _state.model is None:
@@ -301,50 +371,82 @@ async def query(request: QueryRequest):
         col = request.collection or None
         limit = request.limit
 
-        # ── Step 1: Query expansion via LLM ──────────────────────────────
+        # ── Step 0: Strong signal detection ─────────────────────────────
+        # Check if top BM25 result is strong enough to skip LLM expansion
+        # TS: topScore >= 0.85 AND (topScore - secondScore) >= 0.15
         t0 = time.perf_counter()
+        initial_results = hybrid.fts.search(request.query, limit=20, collection=col)
+        strong_signal = False
+
+        if len(initial_results) >= 2:
+            top_score = initial_results[0].get("score", 0.0)
+            second_score = initial_results[1].get("score", 0.0)
+            if top_score >= 0.85 and (top_score - second_score) >= 0.15:
+                strong_signal = True
+                logger.info(
+                    "Strong signal detected: top=%.3f, second=%.3f -> skipping LLM expansion",
+                    top_score,
+                    second_score,
+                )
+
+        # ── Step 1: Query expansion via LLM (skip if strong signal) ───────
         fts_queries = [request.query]
         vec_queries = [request.query]
         reranker = None
-        try:
-            reranker = get_reranker()
-            loop = asyncio.get_event_loop()
-            expanded = await loop.run_in_executor(
-                None, reranker.expand_query, request.query
-            )
-            # expanded[0] is always the original query; [1:] are LLM-generated variants
-            for v in expanded[1:]:
-                if v and v.strip() and v != request.query:
-                    fts_queries.append(v)
-                    vec_queries.append(v)
-            logger.info(
-                "Query expansion: %d BM25 queries, %d vector queries (%.1fs)",
-                len(fts_queries),
-                len(vec_queries),
-                time.perf_counter() - t0,
-            )
-        except Exception as exp_err:
-            logger.warning(
-                "Query expansion failed (%s), using original query only", exp_err
-            )
+
+        if not strong_signal:
+            try:
+                reranker = get_reranker()
+                loop = asyncio.get_event_loop()
+                expanded = await loop.run_in_executor(
+                    None,
+                    reranker.expand_query,
+                    request.query,
+                    True,  # include_lexical=True for query
+                )
+                # expanded is now {"lex": [...], "vec": [...], "hyde": [...]}
+                # Lex variants go to FTS only
+                for v in expanded.get("lex", []):
+                    if v and v.strip():
+                        fts_queries.append(v)
+                # Vec and hyde variants go to both FTS and Vector
+                for v in expanded.get("vec", []) + expanded.get("hyde", []):
+                    if v and v.strip():
+                        fts_queries.append(v)
+                        vec_queries.append(v)
+                logger.info(
+                    "Query expansion: %d BM25 queries, %d vector queries (%.1fs)",
+                    len(fts_queries),
+                    len(vec_queries),
+                    time.perf_counter() - t0,
+                )
+            except Exception as exp_err:
+                logger.warning(
+                    "Query expansion failed (%s), using original query only", exp_err
+                )
+        else:
+            logger.info("Skipping LLM expansion due to strong signal")
 
         # ── Steps 2 + 3: Multi-query BM25 + vector → ranked id lists ─────
         t1 = time.perf_counter()
         k = 60
-        ranked_lists: list = []  # each element: [doc_id, ...] in rank order
-        weights_list: list = []
-        doc_info: dict = {}
+        ranked_lists: List[List[str]] = []  # each element: [doc_id, ...] in rank order
+        weights_list: List[float] = []
+        doc_info: Dict[str, Dict[str, Any]] = {}
+
+        # Track: doc_id -> {rrf_score, top_rank} for top-rank bonus
+        doc_rank_tracking: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"score": 0.0, "top_rank": math.inf}
+        )
 
         # BM25 searches (original query → weight 2.0; expanded → weight 1.0)
         for i, q in enumerate(fts_queries):
-            results = hybrid.fts.search(q, limit=limit * 3)
-            if col:
-                results = [r for r in results if r.get("collection") == col]
+            results = hybrid.fts.search(q, limit=limit * 3, collection=col)
             if results:
                 ids = [f"{r['collection']}:{r['path']}" for r in results]
                 ranked_lists.append(ids)
                 weights_list.append(2.0 if i == 0 else 1.0)
-                for r in results:
+                for rank, r in enumerate(results):  # 0-indexed rank
                     did = f"{r['collection']}:{r['path']}"
                     if did not in doc_info:
                         doc_info[did] = {
@@ -353,7 +455,11 @@ async def query(request: QueryRequest):
                             "path": r["path"],
                             "content": r.get("content", ""),
                             "type": "fts",
+                            "fts_score": r.get("score", 0.0),
                         }
+                    # Track top rank
+                    if rank < doc_rank_tracking[did]["top_rank"]:
+                        doc_rank_tracking[did]["top_rank"] = rank
 
         # Vector searches (original query → weight 2.0; expanded → weight 1.0)
         for i, q in enumerate(vec_queries):
@@ -362,7 +468,7 @@ async def query(request: QueryRequest):
                 ids = [f"{r.collection}:{r.path}" for r in v_results]
                 ranked_lists.append(ids)
                 weights_list.append(2.0 if i == 0 else 1.0)
-                for r in v_results:
+                for rank, r in enumerate(v_results):  # 0-indexed rank
                     did = f"{r.collection}:{r.path}"
                     if did not in doc_info:
                         doc_info[did] = {
@@ -371,34 +477,56 @@ async def query(request: QueryRequest):
                             "path": r.path,
                             "content": r.body,
                             "type": "vector",
+                            "vec_score": r.score,
                         }
                     else:
                         doc_info[did]["type"] = "hybrid"
+                        doc_info[did]["vec_score"] = r.score
+                    # Track top rank
+                    if rank < doc_rank_tracking[did]["top_rank"]:
+                        doc_rank_tracking[did]["top_rank"] = rank
 
         logger.info("BM25+vector search: %.1fs", time.perf_counter() - t1)
 
         if not doc_info:
             return QueryResponse(results=[])
 
-        # ── Step 4: Weighted Reciprocal Rank Fusion ──────────────────────
+        # ── Step 4: Weighted Reciprocal Rank Fusion with top-rank bonus ────
         t2 = time.perf_counter()
-        rrf_scores: dict = defaultdict(float)
         for ids, w in zip(ranked_lists, weights_list):
-            for rank, did in enumerate(ids, 1):
-                rrf_scores[did] += w / (k + rank)
+            for rank, did in enumerate(ids):  # 0-indexed rank
+                # RRF formula: w / (k + rank + 1)
+                doc_rank_tracking[did]["score"] += w / (k + rank + 1)
 
-        sorted_docs = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        # Apply top-rank bonus (TS implementation)
+        for did, entry in doc_rank_tracking.items():
+            top_rank = entry["top_rank"]
+            if top_rank == 0:
+                entry["score"] += 0.05  # Rank 0 gets +0.05
+            elif top_rank <= 2:
+                entry["score"] += 0.02  # Ranks 1-2 get +0.02
+
+        # Sort by RRF score and get top 40
+        sorted_docs = sorted(
+            doc_rank_tracking.items(), key=lambda x: x[1]["score"], reverse=True
+        )[:40]
+
         rrf_ordered = []
-        for rrf_rank, (did, rrf_score) in enumerate(sorted_docs[:40], 1):
+        for rrf_rank, (did, entry) in enumerate(sorted_docs):
             rrf_ordered.append(
                 {
                     "id": did,
-                    "score": rrf_score,
-                    "_rrf_rank": rrf_rank,
+                    "score": entry["score"],  # RRF cumulative score
+                    "_rrf_rank": rrf_rank + 1,  # 1-indexed for display
+                    "_top_rank": entry["top_rank"],  # Track best rank
                     **doc_info[did],
                 }
             )
-        logger.info("RRF fusion: %.1fs, %d candidates", time.perf_counter() - t2, len(rrf_ordered))
+        logger.info(
+            "RRF fusion: %.1fs, %d candidates",
+            time.perf_counter() - t2,
+            len(rrf_ordered),
+        )
 
         # ── Step 5: LLM cross-encoder reranking ─────────────────────────
         # Only rerank top-10 by RRF to limit latency; tail docs keep RRF order.
@@ -409,8 +537,11 @@ async def query(request: QueryRequest):
                 rerank_candidates = rrf_ordered[:RERANK_TOP_N]
                 loop = asyncio.get_event_loop()
                 reranked = await loop.run_in_executor(
-                    None, reranker.rerank,
-                    request.query, rerank_candidates, len(rerank_candidates)
+                    None,
+                    reranker.rerank,
+                    request.query,
+                    rerank_candidates,
+                    len(rerank_candidates),
                 )
                 # Append tail docs (beyond RERANK_TOP_N) in original RRF order
                 reranked_ids = {d["id"] for d in reranked}
@@ -418,16 +549,20 @@ async def query(request: QueryRequest):
                     if doc["id"] not in reranked_ids:
                         reranked.append(doc)
                 logger.info(
-                    "Reranking %d docs: %.1fs", len(rerank_candidates), time.perf_counter() - t3
+                    "Reranking %d docs: %.1fs",
+                    len(rerank_candidates),
+                    time.perf_counter() - t3,
                 )
 
-                # ── Step 6: Position-aware score blending ─────────────────
+                # ── Step 6: Position-aware score blending (TS-style) ────────
+                # TS uses 1/rrfRank (position-based), not cumulative RRF score
                 rrf_rank_map = {c["id"]: c["_rrf_rank"] for c in rrf_ordered}
                 final = []
                 for doc in reranked:
                     rrf_rank = rrf_rank_map.get(doc.get("id", ""), 30)
-                    rrf_s = float(rrf_scores.get(doc.get("id", ""), 0.0))
-                    # rerank_score is already P(yes) in [0,1] from yes/no logit softmax
+                    # Use 1/rrfRank instead of cumulative score
+                    rrf_position_score = 1.0 / rrf_rank if rrf_rank > 0 else 1.0
+                    # rerank_score is P(yes) in [0,1]
                     norm_rerank = float(doc.get("rerank_score", 0.5))
                     # Weight towards RRF for top positions (trust retrieval rank more)
                     if rrf_rank <= 3:
@@ -436,18 +571,31 @@ async def query(request: QueryRequest):
                         w_rrf = 0.60
                     else:
                         w_rrf = 0.40
-                    blended = w_rrf * rrf_s + (1.0 - w_rrf) * norm_rerank
+                    blended = w_rrf * rrf_position_score + (1.0 - w_rrf) * norm_rerank
                     clean = {
                         key: val for key, val in doc.items() if not key.startswith("_")
                     }
                     final.append({**clean, "score": blended})
 
-                final.sort(key=lambda x: x["score"], reverse=True)
+                # ── Step 7: Deduplication by file path ─────────────────────
+                seen_files: set = set()
+                deduped = []
+                for doc in final:
+                    file_key = (doc.get("collection", ""), doc.get("path", ""))
+                    if file_key not in seen_files:
+                        seen_files.add(file_key)
+                        deduped.append(doc)
+                    else:
+                        logger.debug(f"Duplicate removed: {file_key}")
+
+                deduped.sort(key=lambda x: x["score"], reverse=True)
                 logger.info(
-                    "Query pipeline complete: %d results (expanded+reranked)",
-                    len(final[:limit]),
+                    "Query pipeline complete: %d results (expanded+reranked+deduped %d->%d)",
+                    len(deduped[:limit]),
+                    len(final),
+                    len(deduped),
                 )
-                return QueryResponse(results=final[:limit])
+                return QueryResponse(results=deduped[:limit])
             except Exception as rr_err:
                 logger.warning(
                     "Reranking failed (%s), returning plain RRF results", rr_err
@@ -468,11 +616,21 @@ async def query(request: QueryRequest):
 
 @router.post("/expand", response_model=ExpandResponse)
 async def expand(request: ExpandRequest):
-    """Query expansion using local LLM (Qwen2.5-0.5B-Instruct)."""
+    """Query expansion using local LLM (Qwen2.5-0.5B-Instruct).
+
+    Returns typed expansion: {"lex": [...], "vec": [...], "hyde": [...]}
+    - lex: lexical variants (synonyms, spelling variations) - for BM25 only
+    - vec: semantic variants (paraphrases) - for both BM25 and Vector
+    - hyde: hypothetical document - for both BM25 and Vector
+    """
     try:
         reranker = get_reranker()
-        queries = reranker.expand_query(request.query)
-        return ExpandResponse(queries=queries)
+        expanded = reranker.expand_query(request.query, include_lexical=True)
+        # For backward compatibility with API, flatten all variants into a list
+        all_queries = []
+        for variants in expanded.values():
+            all_queries.extend(variants)
+        return ExpandResponse(queries=all_queries)
     except Exception as e:
         logger.error(f"Query expansion error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
