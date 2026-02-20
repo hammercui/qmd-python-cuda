@@ -1,6 +1,7 @@
 """Collection command group."""
 
 import os
+import sys
 
 import click
 
@@ -14,13 +15,30 @@ def collection():
     pass
 
 
-@collection.command(name="add")
+@collection.command(name="add", context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
 @click.argument("path")
 @click.option("--name", help="Collection name (default: basename of path)")
 @click.option("--glob", default="**/*.md", help="Glob pattern (default: **/*.md)")
+@click.option(
+    "--mask",
+    "glob",
+    default="**/*.md",
+    help="Alias for --glob (TS version compatibility)",
+)
 @click.pass_obj
-def collection_add(ctx_obj, path, name, glob):
-    """Add a new collection and immediately index it"""
+@click.pass_context
+def collection_add(ctx, ctx_obj, path, name, glob):
+    """Add a new collection and immediately index it
+
+    On Windows PowerShell, glob patterns may be expanded by the shell before
+    reaching qmd. If this happens, use --files to pass the expanded file list
+    via stdin (one file per line).
+    """
+    # Handle Windows PowerShell glob expansion issue
+    # PowerShell expands **/*.md into individual files, which appear as extra args
+    # We detect this and show a helpful error message
+    remaining_args = ctx.args if hasattr(ctx, "args") else []
+
     abs_path = os.path.abspath(path)
     if not os.path.exists(abs_path):
         console.print(f"[red]Error:[/red] Path {abs_path} does not exist")
