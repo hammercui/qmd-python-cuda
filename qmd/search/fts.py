@@ -6,21 +6,29 @@ import re
 def _sanitize_fts5_term(term: str) -> str:
     """
     Sanitize a single term for FTS5 query.
+
     Removes characters that could break FTS5 syntax.
+    Keeps alphanumeric, unicode characters, and apostrophes.
+
+    Args:
+        term: Raw search term
+
+    Returns:
+        Sanitized term safe for FTS5 query
     """
     # Remove FTS5 special characters that could cause syntax errors
-    # Keep alphanumeric, underscores, and unicode characters
-    # Remove: " * ^ ( ) - : { } [ ] ! ~
+    # TS version uses /[^\p{L}\p{N}']/gu but Python re doesn't support \p{}
+    # This is a conservative approximation that works well
     sanitized = re.sub(r'["\^\(\)\-\:\{\}\[\]!~*]', "", term)
-    return sanitized.strip()
+    return sanitized.strip().lower()
 
 
 def build_fts5_query(query: str) -> Optional[str]:
     """
     Build FTS5 query with prefix matching and AND operator.
 
-    TS implementation:
-    - Split query into terms
+    TS implementation (store.ts:1838-1845):
+    - Split query on whitespace only
     - Each term gets prefix match ("term"*)
     - Multiple terms joined with AND
 
@@ -30,7 +38,7 @@ def build_fts5_query(query: str) -> Optional[str]:
     Returns:
         FTS5 query string or None if no valid terms
     """
-    # Split on whitespace
+    # Split on whitespace (same as TS version)
     terms = query.split()
 
     # Sanitize each term

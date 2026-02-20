@@ -16,7 +16,7 @@ def collection():
 
 @collection.command(name="add")
 @click.argument("path")
-@click.option("--name", required=True, help="Collection name")
+@click.option("--name", help="Collection name (default: basename of path)")
 @click.option("--glob", default="**/*.md", help="Glob pattern (default: **/*.md)")
 @click.pass_obj
 def collection_add(ctx_obj, path, name, glob):
@@ -25,6 +25,11 @@ def collection_add(ctx_obj, path, name, glob):
     if not os.path.exists(abs_path):
         console.print(f"[red]Error:[/red] Path {abs_path} does not exist")
         return
+
+    # Generate default name from path basename if not provided
+    if not name:
+        name = os.path.basename(abs_path)
+        console.print(f"[dim]Using collection name: {name}[/dim]")
 
     # Check if name already exists
     if any(c.name == name for c in ctx_obj.config.collections):
